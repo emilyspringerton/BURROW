@@ -63,6 +63,18 @@ func TestEmitGoScalarParamIfElseBinopNestedCall(t *testing.T) {
 	}
 }
 
+func TestEmitGoNotUnaryOp(t *testing.T) {
+	// Same real gap as emit_c_test.go's own TestEmitCNotUnaryOp, same real trigger
+	// (stdlib/k8s/operator.prn's own (if (not exists) ...)).
+	g, err := buildGo(t, "(defn f [(x : Bool)] : Bool (not x))")
+	if err != nil {
+		t.Fatalf("not should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "(!(x))") {
+		t.Errorf("not should lower to Go's own !, not a bogus call: got %s", g)
+	}
+}
+
 func TestEmitGoBitwiseAndModOps(t *testing.T) {
 	g, err := buildGo(t, "(defn base4-xor [(a : I32) (b : I32)] : I32 (bit-xor a b))\n"+
 		"(defn base4-add [(a : I32) (b : I32)] : I32 (mod (+ a b) 4))")

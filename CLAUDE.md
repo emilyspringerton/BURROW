@@ -50,9 +50,13 @@ in-PARENA construction). Real, honest boundary found the same day: `stdlib/k8s/k
 String+Arena-threaded string-building is fundamentally incompatible with this target's GC-off-safe
 design (no allocation reachable); `stdlib/k8s/scaling.prn` (scalar-only) is the real proof the new
 struct support actually works end to end for the Go target specifically, verified via a real
-`go test` against `DUNG`'s own checked-in copy. `go test`: 50/50 (48 prior + 2 new). `burrow` is
-installed on `PATH`. Full `emit.c` parity (`defenum`/`match`/`loop`/`Result`/`Vec`, struct
-*construction*) and the TypeScript/Java targets remain unstarted.
+`go test` against `DUNG`'s own checked-in copy. **Unary `(not x)` added to BOTH emitters the same
+day** (real trigger: PARENA's own new `stdlib/k8s/operator.prn`) — a real, genuine gap in both
+`emit_c.go` and `emit_go.go` (fell through to a bogus call to a never-defined `not(...)` function;
+the same real gap `parena-c`'s own `src/emit.c` already fixed on 2026-08-21, burrow just hadn't
+hit a real file using it yet). `go test`: 52/52 (50 prior + 2 new). `burrow` is installed on
+`PATH`. Full `emit.c` parity (`defenum`/`match`/`loop`/`Result`/`Vec`, struct *construction*,
+`let`-bindings) and the TypeScript/Java targets remain unstarted.
 
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the

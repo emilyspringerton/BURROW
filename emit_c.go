@@ -129,6 +129,24 @@ func emitCExpr(expr *Node, scope *emitCScope) (string, error) {
 		return "(" + cond + " ? " + thenE + " : " + elseE + ")", nil
 	}
 
+	// `(not x)` -- real, honest unary-operator gap, found and fixed the same day writing
+	// stdlib/k8s/operator.prn (`(if (not exists) ...)`), the exact same real gap `src/emit.c`'s
+	// own header comment already documents fixing for the same reason (2026-08-21, array.prn's
+	// own elementwise): cBinopTable only ever maps 2-argument operators, so `not` (a real,
+	// distinct 1-argument form) fell through to the generic call dispatch below and mangled into
+	// a bogus call to a never-defined `not(...)` C function. Real, direct port of emit.c's own
+	// fix, not independently re-derived.
+	if head == "not" {
+		if len(expr.Children) != 2 {
+			return "", errors.New("emit_c: not requires exactly 1 operand")
+		}
+		inner, err := emitCExpr(expr.Children[1], scope)
+		if err != nil {
+			return "", err
+		}
+		return "(!(" + inner + "))", nil
+	}
+
 	if cOp, ok := cBinopTable[head]; ok {
 		if len(expr.Children) != 3 {
 			return "", errors.New("emit_c: binary operator requires exactly 2 operands (v0 has no variadic +/and/or)")

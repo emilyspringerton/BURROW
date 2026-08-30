@@ -59,6 +59,21 @@ func TestEmitCScalarParamIfElseBinopNestedCall(t *testing.T) {
 	}
 }
 
+func TestEmitCNotUnaryOp(t *testing.T) {
+	// Real, genuine gap found and fixed the same day writing stdlib/k8s/operator.prn ((if (not
+	// exists) ...)): `not` is a real, distinct 1-argument form, not a binop -- it used to fall
+	// through cBinopTable's own 2-argument-only dispatch into a bogus call to a never-defined
+	// `not(...)` C function, the exact same real gap src/emit.c's own header comment already
+	// documents fixing for the same reason.
+	c, err := buildC(t, "(defn f [(x : Bool)] : Bool (not x))")
+	if err != nil {
+		t.Fatalf("not should emit successfully: %v", err)
+	}
+	if !strings.Contains(c, "(!(x))") {
+		t.Errorf("not should lower to C's own !, not a bogus call: got %s", c)
+	}
+}
+
 func TestEmitCBitwiseAndModOps(t *testing.T) {
 	// Same real binop set base4/algebra.prn already proves compiles correctly through the real
 	// C-based parena-c.

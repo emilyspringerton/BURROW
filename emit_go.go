@@ -188,6 +188,20 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 			scope.retType + "(" + elseE + ") }().(" + scope.retType + ")", nil
 	}
 
+	// `(not x)` -- real, same unary-operator gap emit_c.go's own real fix just closed, same day,
+	// same real trigger (stdlib/k8s/operator.prn's own `(if (not exists) ...)`); Go's own `!`
+	// negation operator is the direct equivalent.
+	if head == "not" {
+		if len(expr.Children) != 2 {
+			return "", errors.New("emit_go: not requires exactly 1 operand")
+		}
+		inner, err := emitGoExpr(expr.Children[1], scope)
+		if err != nil {
+			return "", err
+		}
+		return "(!(" + inner + "))", nil
+	}
+
 	if goOp, ok := goBinopTable[head]; ok {
 		if len(expr.Children) != 3 {
 			return "", errors.New("emit_go: binary operator requires exactly 2 operands (v0 has no variadic +/and/or)")
