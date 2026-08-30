@@ -254,6 +254,15 @@ real Go backend as the named candidate host (not committed to).
 - **No real host has asked for the Go emission target (Phase 6) yet** — same honest flag this
   doc's own first draft already carried for that specific piece; still true under the corrected,
   larger scope.
+- **Real, concrete dogfooding data on where Phase 4's own v0 C emitter stops, from `DUNG`'s own
+  first real usage (2026-08-30)**: `DUNG/parena/rect_probe.prn` defines a `defstruct` — `burrow
+  parse`/`analyze` both accept it fine (parser/region already handle `defstruct` generally), but
+  `burrow build` fails exactly at `emit_c: unsupported top-level form (v0 only understands defn,
+  module, export, import)`. Real, precise scoping input for whichever comes first, full `emit.c`
+  parity or a narrower "just `defstruct`" step: `DUNG`'s own real editor-domain build (structs for
+  buffer/pane/node state) is blocked on this specific gap, not on `match`/`loop`/FFI yet — those
+  come after. See `DUNG/NORTHSTAR.md`'s own "Real first PARENA entry attempt" section for the
+  full real test (two working scalar functions ported and gcc-verified first, then this probe).
 
 ## Related
 
