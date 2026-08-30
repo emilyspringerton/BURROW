@@ -33,9 +33,13 @@ diverge from what `parena-c` actually does.
 doc in this monorepo follows, doubly true here since this is a real, large undertaking
 (reimplementing a lexer, parser, region analyzer, and four working emitters is a genuinely big
 project, not a same-afternoon addition like `emit_ts.c`/`emit_java.c` were). **Real status
-(2026-08-30): Phases 1-2 (lexer + parser parity) are shipped** — `lexer.go`/`lexer_test.go`,
-`parser.go`/`parser_test.go`, see each phase's own entry below for the real architecture call made
-getting there. Region-analyzer/emitter parity (Phases 3-4) have not started.
+(2026-08-30): Phases 1-4 (lexer, parser, region analyzer, and a real v0 C emitter) are shipped** —
+`lexer.go`, `parser.go`, `region.go`, `emit_c.go` (+ their real test files), see each phase's own
+entry below for the real architecture call made getting there. `burrow build` now really works for
+the same narrow, real scalar scope `emit_ts.c`/`emit_java.c` already proved out — verified end to
+end (real `gcc` compile + run) against `PAPERCRAFT/stdlib/papercraft/level_mod.prn`. `burrow` is
+installed on `PATH`. Full `emit.c` parity (structs/enums/match/loop/`Result`/`Vec`) and the
+TypeScript/Java targets remain real, honest, unstarted work.
 
 ## Why "in golang and parena" — the real, load-bearing connection to PARENA's own self-hosting effort
 
@@ -186,22 +190,49 @@ parse successfully with zero failures. Cross-checked structurally against the re
 own `parena parse` dump on `stdlib/base4/algebra.prn`: exact match, 246 total nodes, 13 top-level
 forms, both sides identical.
 
-**Phase 3 — region analyzer parity**: real, larger, currently-unstarted work. `selfhost/
-region.prn` doesn't exist yet either (only the lexer domain has been ported to PARENA so far, per
-`PARENA/NORTHSTAR.md`'s own current, honest status) — the same hand-port-fallback question applies
-again here, not yet answered for this domain specifically.
+**Phase 3 — region analyzer parity — real, shipped (2026-08-30).** Founder real-time: "continue
+DUNG i guess you are gonna need burrow on the path if its not already" — DUNG's own real build
+needs a working region-analyze + emit pipeline first. Same real architecture call Phases 1-2
+already made: `selfhost/region.prn` doesn't exist yet, so hand-ported `PARENA/src/region.c`
+directly. **`region.go`**: a real, faithful Go port of the C reference's own real invariant check
+(`Region(Source) >= Region(Destination)` on region-annotated `Arena` params — not the full
+region-safety story, matching `region.h`'s own real, narrow, already-documented scope), verified
+via `region_test.go` — all 7 real test scenarios from `PARENA/tests/test_region.c` ported verbatim,
+including the exact literal error-message text (`"Compile Error: Escaping region pointer from
+:region/scratch to :region/buffer at line 4"`) DoD's own table specifies. `go build`/`go vet`/
+`go test` clean, 30/30 total. Stress-tested against the entire real corpus: all 111 `.prn` files
+parse AND region-analyze successfully, zero false positives/negatives.
 
-**Phase 4 — emitter parity**: real C/TypeScript/Java output matching `emit.c`/`emit_ts.c`/
-`emit_java.c`'s own real behavior, proven against the shared test corpus named above.
+**Phase 4 — emitter parity (C target, v0) — real, shipped (2026-08-30).** **`emit_c.go`**: the
+same real, narrow v0 scope `PARENA/src/emit_ts.c`/`src/emit_java.c` already proved out this same
+session (scalar `I32`/`F64`/`Bool`/`String` params, one-expression bodies, the real binop set —
+confirmed by reading `emit.c` directly, not guessed: `+`/`-`/`*`/`/`/`<`/`>`/`<=`/`>=`/`=`→`==`/
+`and`→`&&`/`or`→`||`/`bit-and`→`&`/`bit-or`→`|`/`bit-xor`→`^`/`mod`→`%`, real C types
+`int`/`double`/`char *`/`void`) — deliberately NOT the full 5944-line `emit.c` (`defstruct`/
+`defenum`/`match`/`loop`/`recur`/`Result`/`Vec` remain real, separate, unstarted work, the same
+honest scale call every earlier phase already made. **Real, genuine bug found and fixed while
+testing this for real** against `stdlib/mishri/humanness.prn`: an early version silently emitted
+`math/pi`/`math/random` (real, namespaced identifiers this v0's C target doesn't support, matching
+`STDLIB.md`'s own documented gap) as literal broken C syntax — cross-checked directly against the
+real reference (`parena build` on the identical input reports a real "unknown identifier 'math/pi'
+at line 36" error), confirming this needed a real "does this identifier actually resolve to a
+local param or a known top-level defn" validation, not a silent pass-through. Fixed, with two new
+regression tests. `go test`: 38/38 total (9 lexer + 14 parser + 7 region + 8 emit_c). **Real, full
+end-to-end proof, not just written**: compiled `PARENA/stdlib/papercraft/level_mod.prn` via
+`burrow build`, actually compiled the output with a real `gcc`, and ran it against the exact same
+real assertions `PAPERCRAFT/packages/simulation/level_mod_test.c` already uses — all pass. `burrow`
+is now installed on `PATH` (`~/.local/bin/burrow`, matching this monorepo's own real CLI-install
+convention). TypeScript/Java targets remain real, honest "not yet implemented."
 
 **Phase 5 — the real founder-named acceptance bar**: `burrow build`/`burrow parse`/`burrow
 analyze` pass the exact same real `.prn` fixtures and assertions `parena-c`'s own
 `tests/test_lexer_parser.c`/`test_region.c`/`test_emit.c`/`test_emit_ts.c`/`test_emit_java.c`
 already check — this is the real, concrete "BURROW works" milestone, not a vaguer "feels
-equivalent" one. Real, partial progress already made toward this specific bar: Phase 1/2's own
-lexer+parser work already passes the real, shared `test_lexer_parser.c`-equivalent corpus (ported
-directly into `lexer_test.go`/`parser_test.go`) — the remaining gap is `test_region.c`/
-`test_emit.c`/`test_emit_ts.c`/`test_emit_java.c`, gated on Phases 3-4 above.
+equivalent" one. **Real, substantial progress**: Phases 1-4 now cover the real, shared corpus from
+`test_lexer_parser.c`/`test_region.c` (ported directly, 30/30 assertions) plus a real, narrow v0
+slice of `test_emit.c`'s own real scope (scalar C-target functions, not the full 5944-line
+surface) — the remaining gap is full `emit.c` parity (`defstruct`/`defenum`/`match`/`loop`/`Result`/
+`Vec`) plus `test_emit_ts.c`/`test_emit_java.c` (the TypeScript/Java targets).
 
 **Phase 6 (real, and the one piece of the ORIGINAL ask this doc's corrected scope still owns)** —
 a real, new, native Go EMISSION TARGET (`parena build foo.prn -o foo.go`, or the BURROW-native
@@ -234,8 +265,10 @@ real Go backend as the named candidate host (not committed to).
 - `GoblinFoxDragon` — the real, named candidate host for a GC-off-safe PARENA-compiled decision
   layer (Phase 6, not committed to).
 - `DUNG` — its own real, separate repo (first scoped inside this repo as `DUNG.md`, moved by
-  founder correction), "the BURROW editor" — its own real build depends directly on this repo's
-  own Phase 3-4 (region analyzer + emitter parity) landing, making it this project's own real,
-  live, flagship dogfooding consumer once that ships.
+  founder correction), "the BURROW editor" — its own real build depends on this repo's own emit
+  capability, now real for the narrow, scalar v0 scope (Phase 4). Its own ground-up PARENA editor
+  port needs to stay within that same real scope (no `defstruct`/`match`/`loop`/`Vec` yet) until
+  full `emit.c` parity lands — a real, concrete design constraint for DUNG's own next scoping
+  pass, not a full unblock yet.
 - `PAPERCRAFT/docs/NORTHSTAR_WEB_CLIENT.md` — the same-session precedent this doc's own "scoping
   pass before code" structure follows.

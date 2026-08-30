@@ -19,22 +19,23 @@ that same low-allocation discipline to `burrow`'s own Go implementation.
 
 ## Status
 
-Real CLI shell shipped (`main.go`, full command parity with `parena`'s own surface). Phases 1-2
-(lexer + parser parity) shipped: `lexer.go`/`parser.go` + their real test files, faithful
-hand-ports of `PARENA/src/lexer.c`/`src/parser.c`+`ast.h`, verified against all 23 real assertions
-from `PARENA/tests/test_selfhost_lexer.c` + `PARENA/tests/test_lexer_parser.c`, plus a full
-real-corpus stress test (all 111 `.prn` files in `PARENA/stdlib`+`PARENA/selfhost` parse clean) —
-see `NORTHSTAR.md`'s own Phase 1/2 entries for the real architecture call (hand-port, not a
-PARENA-Go emitter — the language surface these files need is well beyond any existing PARENA
-emitter's proven scope). Region-analyzer/emitter parity not started.
+Real CLI shell shipped (`main.go`, full command parity with `parena`'s own surface). Phases 1-4
+(lexer, parser, region analyzer, and a real v0 C emitter) shipped: `lexer.go`/`parser.go`/
+`region.go`/`emit_c.go` + their real test files, faithful hand-ports of `PARENA/src/lexer.c`/
+`parser.c`+`ast.h`/`region.c`, plus a new v0 C emitter matching `emit_ts.c`/`emit_java.c`'s own
+proven narrow scope — verified against all 30 real assertions ported from PARENA's own C reference
+test suite, a full real-corpus stress test (111 `.prn` files parse+region-analyze clean), and a
+real end-to-end proof (`burrow build` → real `gcc` compile → real, correct behavior against
+`level_mod_test.c`'s own assertions). `go test`: 38/38. `burrow` is installed on `PATH`. Full
+`emit.c` parity and the TypeScript/Java targets remain unstarted.
 
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the
 BURROW editor," a unified terminal emulator + editor rewriting `PITVIPER` and PARENA's own
 `stdlib/editor/*.prn`. Real, load-bearing relationship: DUNG's own real build compiles its
-ground-up PARENA editor source via the real `burrow` CLI this repo builds, making DUNG this
-repo's own real, live, flagship dogfooding consumer — its own build is gated on this repo's own
-Phase 3-4 (region analyzer + emitter parity) landing.
+ground-up PARENA editor source via the real `burrow` CLI this repo builds. Its own build now works
+for the same narrow, scalar v0 scope this repo's own Phase 4 just proved — DUNG's own editor port
+needs to stay within that scope until full `emit.c` parity lands.
 
 ## Related Repos
 

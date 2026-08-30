@@ -25,6 +25,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 const usage = `usage: burrow parse <file.prn>
@@ -47,12 +48,55 @@ func notImplemented(subcommand, phase string) int {
 	return 1
 }
 
+// nodeHasText reports whether n's own real Text field is meaningful (Symbol/Keyword/String/
+// Number) -- distinct from Text == "", since a real, valid empty string LITERAL ("") is a real
+// NodeString with meaningful (if empty) text, not "no text" the way NodeColon/NodeAt's own real
+// text-less punctuation is. Matches PARENA/src/main.c's own real `n->text != NULL` check exactly
+// (Go has no NULL string; this is the correct, non-lossy real equivalent).
+func nodeHasText(n *Node) bool {
+	switch n.Type {
+	case NodeSymbol, NodeKeyword, NodeString, NodeNumber:
+		return true
+	default:
+		return false
+	}
+}
+
+// printNode -- real, direct port of PARENA/src/main.c's own print_node, matching its real output
+// format exactly (same real dump shape "burrow parse" and "parena parse" now both produce, real
+// CLI-surface parity, not just command-shape parity).
+func printNode(n *Node, depth int) {
+	fmt.Print(strings.Repeat("  ", depth))
+	switch {
+	case nodeHasText(n):
+		fmt.Printf("%s: %s (line %d)\n", n.Type, n.Text, n.Line)
+	case n.Type == NodeList || n.Type == NodeVec || n.Type == NodeMap:
+		fmt.Printf("%s (line %d, %d children)\n", n.Type, n.Line, len(n.Children))
+	default:
+		fmt.Printf("%s (line %d)\n", n.Type, n.Line)
+	}
+	for _, child := range n.Children {
+		printNode(child, depth+1)
+	}
+}
+
 func cmdParse(args []string) int {
 	if len(args) < 1 {
 		fmt.Fprint(os.Stderr, "usage: burrow parse <file.prn>\n")
 		return 1
 	}
-	return notImplemented("parse", "Phase 1 -- lexer parity")
+	src, err := os.ReadFile(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: cannot read %s\n", args[0])
+		return 1
+	}
+	program, perr := ParseProgram(string(src))
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: parse error: %v\n", perr)
+		return 1
+	}
+	printNode(program, 0)
+	return 0
 }
 
 func cmdAnalyze(args []string) int {
@@ -60,7 +104,22 @@ func cmdAnalyze(args []string) int {
 		fmt.Fprint(os.Stderr, "usage: burrow analyze <file.prn>\n")
 		return 1
 	}
-	return notImplemented("analyze", "Phase 2 -- parser + region analyzer parity")
+	src, err := os.ReadFile(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: cannot read %s\n", args[0])
+		return 1
+	}
+	program, perr := ParseProgram(string(src))
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: parse error: %v\n", perr)
+		return 1
+	}
+	if rerr := RegionAnalyze(program); rerr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: %v\n", rerr)
+		return 1
+	}
+	fmt.Printf("burrow: %s: region analysis OK\n", args[0])
+	return 0
 }
 
 func cmdFmt(args []string) int {
@@ -82,7 +141,58 @@ func cmdBuild(args []string) int {
 		fmt.Fprint(os.Stderr, "usage: burrow build <file.prn> [file2.prn ...] -o <output.c|output.ts|output.java>\n")
 		return 1
 	}
-	return notImplemented("build", "Phase 3 -- emitter parity (C/TypeScript/Java), Phase 5 for a new native Go target")
+	paths := args[:len(args)-2]
+	outPath := args[len(args)-1]
+
+	// Real, minimal multi-file support: each input file is parsed separately, then their own
+	// top-level forms are concatenated into ONE combined program, matching parena's own real
+	// main.c cmd_build convention exactly (a real, minimal "linker," not full module resolution).
+	program := &Node{Type: NodeList, Line: 1}
+	for _, path := range paths {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "burrow: cannot read %s\n", path)
+			return 1
+		}
+		fileProgram, perr := ParseProgram(string(src))
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "burrow: %s: parse error: %v\n", path, perr)
+			return 1
+		}
+		program.Children = append(program.Children, fileProgram.Children...)
+	}
+
+	if rerr := RegionAnalyze(program); rerr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: %v\n", rerr)
+		return 1
+	}
+
+	// Real, same real target dispatch by output extension parena's own cmd_build already uses:
+	// .ts/.java route to their own real emitters (not yet built in burrow -- real, honest,
+	// explicit not-yet-implemented, not silently falling through to the C emitter and producing
+	// wrong output), anything else uses the real C emitter (now real, Phase 4 v0).
+	if strings.HasSuffix(outPath, ".ts") {
+		return notImplemented("build (TypeScript target)", "Phase 4 -- TypeScript emitter parity (real C target already works, see emit_c.go)")
+	}
+	if strings.HasSuffix(outPath, ".java") {
+		return notImplemented("build (Java target)", "Phase 4 -- Java emitter parity (real C target already works, see emit_c.go)")
+	}
+
+	emitted, eerr := EmitC(program)
+	if eerr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: %v\n", eerr)
+		return 1
+	}
+	if err := os.WriteFile(outPath, []byte(emitted), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: cannot write %s\n", outPath)
+		return 1
+	}
+	if len(paths) == 1 {
+		fmt.Printf("burrow: %s -> %s\n", paths[0], outPath)
+	} else {
+		fmt.Printf("burrow: [%d files] -> %s\n", len(paths), outPath)
+	}
+	return 0
 }
 
 func cmdCiStatus(args []string) int {
