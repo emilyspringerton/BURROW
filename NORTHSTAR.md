@@ -33,9 +33,9 @@ diverge from what `parena-c` actually does.
 doc in this monorepo follows, doubly true here since this is a real, large undertaking
 (reimplementing a lexer, parser, region analyzer, and four working emitters is a genuinely big
 project, not a same-afternoon addition like `emit_ts.c`/`emit_java.c` were). **Real status
-(2026-08-30): Phase 1 (lexer parity) is shipped** — `lexer.go`/`lexer_test.go`, see that phase's
-own entry below for the real architecture call made getting there. Parser/region-analyzer/emitter
-parity (Phases 2-4) have not started.
+(2026-08-30): Phases 1-2 (lexer + parser parity) are shipped** — `lexer.go`/`lexer_test.go`,
+`parser.go`/`parser_test.go`, see each phase's own entry below for the real architecture call made
+getting there. Region-analyzer/emitter parity (Phases 3-4) have not started.
 
 ## Why "in golang and parena" — the real, load-bearing connection to PARENA's own self-hosting effort
 
@@ -116,7 +116,7 @@ precedent for how that kind of real integration call gets made later, not guesse
 
 Founder real-time, immediately after the GC-off design question above: "dog food it like write
 the golang in a way that doesnt allocate on the heap or whatever." Real, direct extension, not a
-new idea: the GC-off-safe discipline above was scoped only to code BURROW *emits* (Phase 5's own
+new idea: the GC-off-safe discipline above was scoped only to code BURROW *emits* (Phase 6's own
 Go target) — this applies the same real discipline to `burrow`'s *own* implementation, the actual
 Go source of the lexer/parser/region-analyzer/emitters themselves. Real, concrete practices this
 means, matching Go's own well-known, real, standard low-allocation idioms (not exotic — the same
@@ -133,7 +133,7 @@ section above) — it doesn't need `debug.SetGCPercent(-1)` itself to be safe, a
 directive isn't asking for that. The real point is a genuinely low-allocation *implementation
 style* throughout `burrow`'s own Go source, both because it's real, good, idiomatic low-latency Go
 practice worth modeling, and because it's the most honest possible proof that BURROW's own
-GC-off-safe code-generation philosophy (Phase 5) is something its own authors actually believe in,
+GC-off-safe code-generation philosophy (Phase 6) is something its own authors actually believe in,
 not just a claim made about code it hands to someone else. **Not yet a checked, enforced bar** (no
 real Go code exists yet to check it against) — named here as a real, standing implementation
 constraint for whoever writes Phase 1 onward, not deferred to a later cleanup pass.
@@ -165,22 +165,45 @@ substantial PARENA source — `selfhost/lexer.prn` itself (2104 tokens), `stdlib
 `stdlib/mishri/humanness.prn` (127), `stdlib/gta7/humanness_fingerprint_mod.prn` (74) — all
 tokenized cleanly, no crashes, no errors. This is the real, founder-named "pass all that parena c
 tests" acceptance bar, achieved directly for the lexer domain — not a new PARENA Go emission
-target (that piece, if ever built, is real, separate, deferred work, see Phase 5 below).
+target (that piece, if ever built, is real, separate, deferred work, see Phase 6 below).
 
-**Phase 2 — parser + region analyzer parity**: real, larger, currently-unstarted work — no
-`selfhost/parser.prn`/`selfhost/region.prn` exist yet (only the lexer domain has been ported to
-PARENA so far, per `PARENA/NORTHSTAR.md`'s own current, honest status).
+**Phase 2 — parser parity — real, shipped (2026-08-30).** Founder real-time: "continue project
+BURROW." Same real architecture call Phase 1 already made, inherited directly: `selfhost/
+parser.prn` doesn't exist yet, so there's no PARENA-source parser to compile via a PARENA-Go
+emitter that also doesn't exist — took the same hand-port fallback. **`parser.go`**: a real,
+faithful Go port of `src/parser.c` + `ast.h` (the C reference's own recursive-descent parser and
+generic S-expression tree), verified via `parser_test.go` — all 14 real test scenarios from
+`tests/test_lexer_parser.c` ported verbatim (both the balanced-form cases and the DoD's own
+required negative/malformed cases: unterminated list, mismatched bracket kind, stray closing
+paren, unterminated string, mismatched nested bracket), every error message and structural
+expectation copied from that file's own real assertions. `go build`/`go vet`/`go test` all clean,
+23/23 total (9 lexer + 14 parser). **Real, deliberate idiomatic departure**: Go multi-return
+`(*Node, error)` replaces the C reference's own `setjmp`/`longjmp` error-unwind entirely — Go has
+no equivalent primitive worth reaching for here, and `panic`/`recover` is idiomatically reserved
+for exceptional conditions, not routine syntax errors. Stress-tested against the ENTIRE real
+PARENA corpus, not just the unit tests: all 111 `.prn` files across `stdlib/` and `selfhost/`
+parse successfully with zero failures. Cross-checked structurally against the real C reference's
+own `parena parse` dump on `stdlib/base4/algebra.prn`: exact match, 246 total nodes, 13 top-level
+forms, both sides identical.
 
-**Phase 3 — emitter parity**: real C/TypeScript/Java output matching `emit.c`/`emit_ts.c`/
+**Phase 3 — region analyzer parity**: real, larger, currently-unstarted work. `selfhost/
+region.prn` doesn't exist yet either (only the lexer domain has been ported to PARENA so far, per
+`PARENA/NORTHSTAR.md`'s own current, honest status) — the same hand-port-fallback question applies
+again here, not yet answered for this domain specifically.
+
+**Phase 4 — emitter parity**: real C/TypeScript/Java output matching `emit.c`/`emit_ts.c`/
 `emit_java.c`'s own real behavior, proven against the shared test corpus named above.
 
-**Phase 4 — the real founder-named acceptance bar**: `burrow build`/`burrow parse`/`burrow
+**Phase 5 — the real founder-named acceptance bar**: `burrow build`/`burrow parse`/`burrow
 analyze` pass the exact same real `.prn` fixtures and assertions `parena-c`'s own
 `tests/test_lexer_parser.c`/`test_region.c`/`test_emit.c`/`test_emit_ts.c`/`test_emit_java.c`
 already check — this is the real, concrete "BURROW works" milestone, not a vaguer "feels
-equivalent" one.
+equivalent" one. Real, partial progress already made toward this specific bar: Phase 1/2's own
+lexer+parser work already passes the real, shared `test_lexer_parser.c`-equivalent corpus (ported
+directly into `lexer_test.go`/`parser_test.go`) — the remaining gap is `test_region.c`/
+`test_emit.c`/`test_emit_ts.c`/`test_emit_java.c`, gated on Phases 3-4 above.
 
-**Phase 5 (real, and the one piece of the ORIGINAL ask this doc's corrected scope still owns)** —
+**Phase 6 (real, and the one piece of the ORIGINAL ask this doc's corrected scope still owns)** —
 a real, new, native Go EMISSION TARGET (`parena build foo.prn -o foo.go`, or the BURROW-native
 equivalent), designed GC-off-safe per the section above, proven against `GoblinFoxDragon`'s own
 real Go backend as the named candidate host (not committed to).
@@ -197,7 +220,7 @@ real Go backend as the named candidate host (not committed to).
   ongoing cost this doc names but doesn't resolve (matching Go/Rust's own real, well-known
   "self-hosted rewrite" tradeoff history, cited in `PARENA/NORTHSTAR.md`'s own self-hosting
   section as the precedent this whole idea is patterned on).
-- **No real host has asked for the Go emission target (Phase 5) yet** — same honest flag this
+- **No real host has asked for the Go emission target (Phase 6) yet** — same honest flag this
   doc's own first draft already carried for that specific piece; still true under the corrected,
   larger scope.
 
@@ -207,8 +230,8 @@ real Go backend as the named candidate host (not committed to).
   independent, already-in-progress `selfhost/*.prn` effort this doc's own leading hypothesis leans
   on.
 - `PARENA/src/emit_ts.c`, `PARENA/src/emit_java.c`, `PARENA/STDLIB.md` — the real, proven v0
-  emitter template Phase 5's own Go emission target (if built) would still follow.
+  emitter template Phase 6's own Go emission target (if built) would still follow.
 - `GoblinFoxDragon` — the real, named candidate host for a GC-off-safe PARENA-compiled decision
-  layer (Phase 5, not committed to).
+  layer (Phase 6, not committed to).
 - `PAPERCRAFT/docs/NORTHSTAR_WEB_CLIENT.md` — the same-session precedent this doc's own "scoping
   pass before code" structure follows.

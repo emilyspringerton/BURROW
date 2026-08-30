@@ -19,19 +19,28 @@ that same low-allocation discipline to `burrow`'s own Go implementation.
 
 ## Status
 
-Real CLI shell shipped (`main.go`, full command parity with `parena`'s own surface). Phase 1
-(lexer parity) shipped: `lexer.go` + `lexer_test.go`, a real hand-port of `PARENA/src/lexer.c`
-verified against `PARENA/tests/test_selfhost_lexer.c`'s own real assertions — see `NORTHSTAR.md`'s
-own Phase 1 entry for the real architecture call (hand-port, not a PARENA-Go emitter — the
-language surface `selfhost/lexer.prn` needs is well beyond any existing PARENA emitter's proven
-scope). Parser/region-analyzer/emitter parity not started.
+Real CLI shell shipped (`main.go`, full command parity with `parena`'s own surface). Phases 1-2
+(lexer + parser parity) shipped: `lexer.go`/`parser.go` + their real test files, faithful
+hand-ports of `PARENA/src/lexer.c`/`src/parser.c`+`ast.h`, verified against all 23 real assertions
+from `PARENA/tests/test_selfhost_lexer.c` + `PARENA/tests/test_lexer_parser.c`, plus a full
+real-corpus stress test (all 111 `.prn` files in `PARENA/stdlib`+`PARENA/selfhost` parse clean) —
+see `NORTHSTAR.md`'s own Phase 1/2 entries for the real architecture call (hand-port, not a
+PARENA-Go emitter — the language surface these files need is well beyond any existing PARENA
+emitter's proven scope). Region-analyzer/emitter parity not started.
+
+**`DUNG.md`** — a new, real sub-project: "the BURROW editor," a unified terminal emulator + editor
+rewriting `PITVIPER` and PARENA's own `stdlib/editor/*.prn` into one Go+PARENA application inside
+this repo, with a real UX foundation adopted directly from `EmilyOS/docs/legacy-archive/
+gui-v0.1-design-capture.md`. Scoping only, no DUNG code yet — read `DUNG.md` before writing any.
 
 ## Related Repos
 
 - `PARENA` — the language and compiler this is a fourth compilation target for; `src/emit_ts.c`
   and `src/emit_java.c` are the real, proven v0 emitter template this project follows.
+- `PITVIPER`, `EmilyOS` — the real terminal emulator DUNG rewrites, and the real repo its own UX
+  foundation is adopted from (see `DUNG.md`). `PITVIPER` itself is unaffected, stays as-is.
 - `GoblinFoxDragon` — the named candidate real Go host for a GC-off-safe PARENA-compiled decision
-  layer (Phase 2 in `NORTHSTAR.md`, not committed to yet).
+  layer (Phase 6 in `NORTHSTAR.md`, not committed to yet).
 - `EMILY` — RSI loop / backlog coordination for cross-repo work.
 
 ## Founder Real-Time Direction
