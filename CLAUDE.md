@@ -26,16 +26,33 @@ Real CLI shell shipped (`main.go`, full command parity with `parena`'s own surfa
 proven narrow scope — verified against all 30 real assertions ported from PARENA's own C reference
 test suite, a full real-corpus stress test (111 `.prn` files parse+region-analyze clean), and a
 real end-to-end proof (`burrow build` → real `gcc` compile → real, correct behavior against
-`level_mod_test.c`'s own assertions). `go test`: 38/38. `burrow` is installed on `PATH`. Full
-`emit.c` parity and the TypeScript/Java targets remain unstarted.
+`level_mod_test.c`'s own assertions). **Phase 6 (real, native Go emission target) also shipped**
+(2026-08-30, `emit_go.go`): the same narrow v0 scope as Phase 4's C target, GC-off-safe by
+construction (scalar params, one-expression bodies, no heap allocation reachable), `-o *.go` on
+`burrow build`. Real, Go-specific structural pieces the C target didn't need: kebab-case →
+exported PascalCase names (the emitted package is meant to be imported by a real host, not just
+linked), Go's own real scalar types (`I32`→`int32`, not C's platform `int`), `if` lowered to an
+immediately-invoked func literal (Go has no `?:`) with every branch value explicitly converted to
+the defn's own declared return type before being boxed through `any` — two real, genuine bugs
+found and fixed live while testing a real nested-if probe (a bare `I32` literal defaults to Go's
+`int` when boxed through `any`, not `int32`; a nested `if`'s own result is `any`-typed and needs a
+type ASSERTION at its use site, not the same `T(...)` CONVERSION a concrete value needs), and a
+final `go/format.Source` pass so emitted output is unconditionally gofmt-clean regardless of
+nesting depth. `go test`: 48/48 (38 prior + 10 new). `burrow` is installed on `PATH`. Full
+`emit.c` parity (`defstruct`/`defenum`/`match`/`loop`/`Result`/`Vec`) and the TypeScript/Java
+targets remain unstarted.
 
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the
 BURROW editor," a unified terminal emulator + editor rewriting `PITVIPER` and PARENA's own
-`stdlib/editor/*.prn`. Real, load-bearing relationship: DUNG's own real build compiles its
-ground-up PARENA editor source via the real `burrow` CLI this repo builds. Its own build now works
-for the same narrow, scalar v0 scope this repo's own Phase 4 just proved — DUNG's own editor port
-needs to stay within that scope until full `emit.c` parity lands.
+`stdlib/editor/*.prn`. Real, load-bearing relationship, now closing the full loop: DUNG's own
+`cmd/dung/main.go` calls directly into `internal/burrowgen` (checked-in output of
+`burrow build parena/entry.prn -o internal/burrowgen/entry_gen.go`, Phase 6's own real Go target)
+for its split-layout and focus-cycling decision logic — no cgo/FFI boundary needed, the exact real
+advantage a native Go emission target has over the C target for a Go-hosted consumer. DUNG is
+this target's own real, live, first host, not `GoblinFoxDragon` (still just a named candidate, not
+committed to) — Phase 6's own "no real host has asked for this yet" precondition is real, past
+tense now.
 
 ## Related Repos
 

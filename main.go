@@ -30,9 +30,10 @@ import (
 
 const usage = `usage: burrow parse <file.prn>
        burrow analyze <file.prn>                          (region analyzer)
-       burrow build <file.prn> [file2.prn ...] -o <output.c|output.ts|output.java>    (C emitter
-       (default), or the TypeScript/Java emitters if -o ends in .ts/.java; multiple files are
-       combined into one compilation unit, in the order given)
+       burrow build <file.prn> [file2.prn ...] -o <output.c|output.go|output.ts|output.java>
+       (C emitter (default), real native Go emitter if -o ends in .go (v0, see emit_go.go), or
+       the TypeScript/Java emitters if -o ends in .ts/.java; multiple files are combined into one
+       compilation unit, in the order given)
        burrow fmt [-w] <file.prn> [file2.prn ...]         (re-indent; -w writes in place, default
        prints to stdout)
        burrow ci-status <owner/repo> <sha>                (GITHUB_TOKEN env var required; exit
@@ -138,7 +139,7 @@ func cmdBuild(args []string) int {
 	// Real, same convention parena's own cmd_build dispatch uses: every argument between "build"
 	// and "-o" is an input file, "-o <output>" must be the final two arguments.
 	if len(args) < 3 || args[len(args)-2] != "-o" {
-		fmt.Fprint(os.Stderr, "usage: burrow build <file.prn> [file2.prn ...] -o <output.c|output.ts|output.java>\n")
+		fmt.Fprint(os.Stderr, "usage: burrow build <file.prn> [file2.prn ...] -o <output.c|output.go|output.ts|output.java>\n")
 		return 1
 	}
 	paths := args[:len(args)-2]
@@ -170,12 +171,30 @@ func cmdBuild(args []string) int {
 	// Real, same real target dispatch by output extension parena's own cmd_build already uses:
 	// .ts/.java route to their own real emitters (not yet built in burrow -- real, honest,
 	// explicit not-yet-implemented, not silently falling through to the C emitter and producing
-	// wrong output), anything else uses the real C emitter (now real, Phase 4 v0).
+	// wrong output); .go is real, new Phase 6 (a real host -- DUNG -- asked for it, see
+	// emit_go.go's own doc comment); anything else uses the real C emitter (Phase 4 v0).
 	if strings.HasSuffix(outPath, ".ts") {
 		return notImplemented("build (TypeScript target)", "Phase 4 -- TypeScript emitter parity (real C target already works, see emit_c.go)")
 	}
 	if strings.HasSuffix(outPath, ".java") {
 		return notImplemented("build (Java target)", "Phase 4 -- Java emitter parity (real C target already works, see emit_c.go)")
+	}
+	if strings.HasSuffix(outPath, ".go") {
+		emittedGo, gerr := EmitGo(program)
+		if gerr != nil {
+			fmt.Fprintf(os.Stderr, "burrow: %v\n", gerr)
+			return 1
+		}
+		if err := os.WriteFile(outPath, []byte(emittedGo), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "burrow: cannot write %s\n", outPath)
+			return 1
+		}
+		if len(paths) == 1 {
+			fmt.Printf("burrow: %s -> %s\n", paths[0], outPath)
+		} else {
+			fmt.Printf("burrow: [%d files] -> %s\n", len(paths), outPath)
+		}
+		return 0
 	}
 
 	emitted, eerr := EmitC(program)

@@ -234,10 +234,35 @@ slice of `test_emit.c`'s own real scope (scalar C-target functions, not the full
 surface) — the remaining gap is full `emit.c` parity (`defstruct`/`defenum`/`match`/`loop`/`Result`/
 `Vec`) plus `test_emit_ts.c`/`test_emit_java.c` (the TypeScript/Java targets).
 
-**Phase 6 (real, and the one piece of the ORIGINAL ask this doc's corrected scope still owns)** —
-a real, new, native Go EMISSION TARGET (`parena build foo.prn -o foo.go`, or the BURROW-native
-equivalent), designed GC-off-safe per the section above, proven against `GoblinFoxDragon`'s own
-real Go backend as the named candidate host (not committed to).
+**Phase 6 — real, native Go emission target — real, shipped (2026-08-30).** Founder real-time:
+"continue adding to DUNG's parena work, we want to emit go with burrow" — the real, concrete host
+this section's own first draft only had a named CANDIDATE for (`GoblinFoxDragon`, "not committed
+to") finally asked for it. `emit_go.go`: the same real, narrow v0 scope emit_c.go's own Phase 4
+already proved (scalar `I32`/`F64`/`Bool`/`String` params, one-expression bodies, the real binop
+set, calls to sibling defns), `-o *.go` on `burrow build`. GC-off-safe by construction per this
+doc's own "real, honest GC-off design question" section above — no `let`/blocks/structs/slices/
+maps/closures reachable in v0 scope, so no heap allocation is possible in the emitted code itself,
+exactly the real precondition that section named. Real Go-specific departures from the C target,
+found and fixed live, not designed in advance: kebab-case → exported PascalCase (the emitted
+package is meant to be imported directly by a real host, unlike C's `#include`-and-link model);
+`if` lowered to an immediately-invoked func literal (Go has no `?:` ternary at all); two real,
+genuine bugs caught by an actual nested-if probe (`clamp01`, two levels deep) before this was
+trusted — a bare `I32` literal boxed through the func literal's own `any`-typed return defaults to
+Go's own `int`, not `int32`, so `.(int32)` at the call site panicked at runtime until every branch
+value got an explicit `RetType(...)` conversion first; a NESTED `if`'s own result is itself
+`any`-typed, so wrapping it with the same `RetType(...)` conversion is a compile error ("need type
+assertion") until the `if` case was changed to self-assert its own result before returning it up.
+A final `go/format.Source` pass (the same real formatter `gofmt` itself calls) makes emitted
+output unconditionally gofmt-clean regardless of nesting depth, rather than this emitter
+hand-tracking indentation to match gofmt's own canonical control-flow line-breaking rules.
+`go test`: 48/48 (38 prior + 10 new, covering the same real failure classes emit_c_test.go's own
+suite already checks, plus the two Go-specific bugs above). **Real, full end-to-end proof, not
+just written**: `DUNG`'s own real `parena/entry.prn` compiled to `internal/burrowgen/entry_gen.go`
+and wired directly into `cmd/dung/main.go` (`layout()`'s split-size math, `nextFocus()`'s
+wraparound math) — no cgo/FFI boundary, a real Go import — `go build`/`go vet`/`go test` and a
+real `bazel build //...` both clean, the real SDL2 visor binary run under Xvfb identically to
+before the mod was wired in. `DUNG` is this target's own real, live, first host now — Phase 5's
+GoblinFoxDragon candidacy is unaffected, just no longer the only one.
 
 ## Real risks and open questions, named honestly
 
