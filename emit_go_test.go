@@ -144,6 +144,39 @@ func TestEmitGoUnitReturnType(t *testing.T) {
 	}
 }
 
+func TestEmitGoDefstructAndGetField(t *testing.T) {
+	// Real, new capability -- the exact real shape stdlib/k8s/k8s.prn's own ServiceSpec + a
+	// field-reading function need.
+	g, err := buildGo(t, "(defstruct ServiceSpec\n  (name : String)\n  (port : I32))\n"+
+		"(defn service-port [(s : ServiceSpec)] : I32\n"+
+		"  (get-field s :port))")
+	// Real defstruct field lists are plain lists, direct children of the defstruct form (not
+	// wrapped in a vec) -- matching k8s.prn's own real shape, confirmed via a real `burrow
+	// parse` probe before writing this test, not guessed.
+	if err != nil {
+		t.Fatalf("defstruct + get-field should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "type ServiceSpec struct") {
+		t.Errorf("defstruct should emit an exported Go struct type: got %s", g)
+	}
+	if !strings.Contains(g, "Name string") || !strings.Contains(g, "Port int32") {
+		t.Errorf("struct fields should be exported PascalCase, real Go types: got %s", g)
+	}
+	if !strings.Contains(g, "func ServicePort(s ServiceSpec) int32") {
+		t.Errorf("a struct-typed param should resolve to the real exported struct type: got %s", g)
+	}
+	if !strings.Contains(g, "(s).Port") {
+		t.Errorf("get-field should lower to real Go dot access: got %s", g)
+	}
+}
+
+func TestEmitGoUnknownStructTypeIsError(t *testing.T) {
+	_, err := buildGo(t, "(defn f [(x : NotRegistered)] : I32 0)")
+	if err == nil {
+		t.Error("an unregistered struct type name should be a real, honest error, not silently accepted")
+	}
+}
+
 func TestEmitGoKebabCaseParamName(t *testing.T) {
 	// Real Go-specific naming rule emit_c.go's own mangleC already handles identically for C
 	// (dash -> underscore) but is worth its own explicit check here since Go param names are

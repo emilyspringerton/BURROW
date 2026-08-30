@@ -38,9 +38,21 @@ found and fixed live while testing a real nested-if probe (a bare `I32` literal 
 `int` when boxed through `any`, not `int32`; a nested `if`'s own result is `any`-typed and needs a
 type ASSERTION at its use site, not the same `T(...)` CONVERSION a concrete value needs), and a
 final `go/format.Source` pass so emitted output is unconditionally gofmt-clean regardless of
-nesting depth. `go test`: 48/48 (38 prior + 10 new). `burrow` is installed on `PATH`. Full
-`emit.c` parity (`defstruct`/`defenum`/`match`/`loop`/`Result`/`Vec`) and the TypeScript/Java
-targets remain unstarted.
+nesting depth. **`defstruct`/`get-field` support added to the Go target the same day** (real
+trigger: PARENA's own new `stdlib/k8s`/`stdlib/helm` packages needed it) — a registered
+`defstruct` emits a real, exported Go struct type (nested struct fields included), `get-field`
+lowers to plain Go dot access. Real, deliberate scope: construction (`{:field val}`) is NOT
+emitted — every real function that would need it only ever *receives* a struct as a parameter; a
+real Go host constructs one with an ordinary composite literal against the exported type, the
+same split the C target's own real C test harnesses already use (`Deployment_new(...)`, not
+in-PARENA construction). Real, honest boundary found the same day: `stdlib/k8s/k8s.prn`/
+`stdlib/helm/helm.prn` themselves still only compile through the C target — their own
+String+Arena-threaded string-building is fundamentally incompatible with this target's GC-off-safe
+design (no allocation reachable); `stdlib/k8s/scaling.prn` (scalar-only) is the real proof the new
+struct support actually works end to end for the Go target specifically, verified via a real
+`go test` against `DUNG`'s own checked-in copy. `go test`: 50/50 (48 prior + 2 new). `burrow` is
+installed on `PATH`. Full `emit.c` parity (`defenum`/`match`/`loop`/`Result`/`Vec`, struct
+*construction*) and the TypeScript/Java targets remain unstarted.
 
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the

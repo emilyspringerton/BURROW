@@ -59,7 +59,14 @@ func mangleGo(name string) string {
 // function only ever passes through or returns a String parameter/literal itself, per this file's
 // own "one real expression" scope, so no string-building/concatenation allocation is reachable
 // here regardless).
-func resolveGoType(typeName string) (string, error) {
+// resolveGoType takes `knownStructs` now — real, new capability (defstruct support, added the
+// same day PARENA's own real k8s/helm stdlib packages needed it, see EmitGo's own doc comment):
+// a registered defstruct name resolves to its own real, exported Go struct type name (PascalCase
+// via mangleGo, matching every real generated Go struct field/function name this emitter already
+// produces), passed by value -- the same real semantics parena-c's own C emitter already gives
+// struct-typed parameters (confirmed by reading its own emitted output directly: `Deployment d`,
+// not a pointer).
+func resolveGoType(typeName string, knownStructs map[string]bool) (string, error) {
 	switch typeName {
 	case "Unit":
 		return "struct{}", nil
@@ -72,7 +79,10 @@ func resolveGoType(typeName string) (string, error) {
 	case "String":
 		return "string", nil
 	default:
-		return "", errors.New("emit_go: unsupported parameter/return type (v0 only understands I32/F64/Bool/String/Unit)")
+		if knownStructs[typeName] {
+			return mangleGo(typeName), nil
+		}
+		return "", errors.New("emit_go: unsupported parameter/return type (v0 only understands I32/F64/Bool/String/Unit, or a registered defstruct type)")
 	}
 }
 
@@ -193,6 +203,25 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 		return "(" + lhs + " " + goOp + " " + rhs + ")", nil
 	}
 
+	// get-field — real, new capability, the read half of defstruct support (see
+	// emitGoDefstruct's own doc comment for why construction isn't emitted here): PARENA's real
+	// `(get-field record :field)` form lowers to Go's own real, plain `record.Field` dot access.
+	// Real shape check matches the parser's own real AST for this form directly (confirmed via
+	// `burrow parse` on a real probe before writing this, not guessed): exactly 3 children,
+	// the record expression, then a `NodeKeyword` (`:field`, parsed with its leading colon
+	// still part of `.Text` -- stripped here).
+	if head == "get-field" {
+		if len(expr.Children) != 3 || expr.Children[2].Type != NodeKeyword {
+			return "", errors.New("emit_go: get-field requires exactly (get-field record :field)")
+		}
+		recordE, err := emitGoExpr(expr.Children[1], scope)
+		if err != nil {
+			return "", err
+		}
+		fieldName := strings.TrimPrefix(expr.Children[2].Text, ":")
+		return "(" + recordE + ")." + mangleGo(fieldName), nil
+	}
+
 	// Otherwise: a real call to another top-level defn in the same generated package -- real,
 	// honest validation first (see emitGoScope's own doc comment).
 	if !scope.knownDefns[head] {
@@ -237,7 +266,43 @@ func mangleGoLocal(name string, scope *emitGoScope) string {
 // difference from emit_c.go's own emitCDefn: Go has no forward-declaration concept at all (a
 // real, standard Go source file's own top-level function order is irrelevant to the Go compiler
 // -- sibling calls in any order already just work), so there is no decl/def split to carry here.
-func emitGoDefn(defn *Node, knownDefns map[string]bool) (string, error) {
+// emitGoDefstruct — real, new capability: a Go `type Name struct { Field1 T1; ... }` for each
+// real `(defstruct Name (field1 : T1) ...)` form. Real, deliberate scope decision, checked
+// against what the real trigger (PARENA's own new `stdlib/k8s`/`stdlib/helm` packages) actually
+// needs before building anything more general: construction (`{:field val}`) and pattern-style
+// access are NOT emitted here -- every real function in those two packages only ever RECEIVES a
+// struct as a parameter (via `get-field`), never constructs one internally; the real host that
+// constructs one (a Go program calling into this generated package) does it with an ordinary Go
+// composite literal against the real, exported struct type this function emits -- the same real
+// split `k8s.prn`'s own C target already uses (a real C test harness constructs via
+// `Deployment_new(...)`, the PARENA-emitted code itself only ever calls `get-field`). Exported
+// (PascalCase) field names, matching the exported function-name convention this emitter already
+// uses, so a real external Go host (DUNG) can actually construct/read these fields.
+func emitGoDefstruct(ds *Node, knownStructs map[string]bool) (string, error) {
+	if len(ds.Children) < 2 || ds.Children[1].Type != NodeSymbol {
+		return "", errors.New("emit_go: defstruct: malformed struct definition")
+	}
+	typeName := mangleGo(ds.Children[1].Text)
+	var fields strings.Builder
+	for _, field := range ds.Children[2:] {
+		if field.Type != NodeList || len(field.Children) != 3 || field.Children[0].Type != NodeSymbol ||
+			field.Children[1].Type != NodeColon || field.Children[2].Type != NodeSymbol {
+			return "", errors.New("emit_go: defstruct: unsupported field shape (v0 only understands plain " +
+				"(name : I32|F64|Bool|String|StructType) fields -- no Arena/region annotations, no Vec fields)")
+		}
+		fType, err := resolveGoType(field.Children[2].Text, knownStructs)
+		if err != nil {
+			return "", err
+		}
+		fields.WriteString(mangleGo(field.Children[0].Text))
+		fields.WriteString(" ")
+		fields.WriteString(fType)
+		fields.WriteString("\n")
+	}
+	return "type " + typeName + " struct {\n" + fields.String() + "}", nil
+}
+
+func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]bool) (string, error) {
 	if len(defn.Children) < 3 || defn.Children[1].Type != NodeSymbol || defn.Children[2].Type != NodeVec {
 		return "", errors.New("emit_go: defn: malformed function definition")
 	}
@@ -250,9 +315,9 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool) (string, error) {
 		if param.Type != NodeList || len(param.Children) != 3 || param.Children[0].Type != NodeSymbol ||
 			param.Children[1].Type != NodeColon || param.Children[2].Type != NodeSymbol {
 			return "", errors.New("emit_go: defn: unsupported parameter shape (v0 only understands plain " +
-				"(name : I32|F64|Bool|String) params -- no Arena/region annotations)")
+				"(name : I32|F64|Bool|String|StructType) params -- no Arena/region annotations)")
 		}
-		pType, err := resolveGoType(param.Children[2].Text)
+		pType, err := resolveGoType(param.Children[2].Text, knownStructs)
 		if err != nil {
 			return "", err
 		}
@@ -271,7 +336,7 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool) (string, error) {
 	if len(defn.Children) != 6 || defn.Children[3].Type != NodeColon {
 		return "", errors.New("emit_go: defn: expected (defn name [params] : RetType body) with exactly one body expression")
 	}
-	retType, err := resolveGoType(defn.Children[4].Text)
+	retType, err := resolveGoType(defn.Children[4].Text, knownStructs)
 	if err != nil {
 		return "", err
 	}
@@ -303,9 +368,13 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool) (string, error) {
 // structurally simpler single pass, unlike EmitC's own real two-pass decl/def split.
 func EmitGo(program *Node) (string, error) {
 	knownDefns := map[string]bool{}
+	knownStructs := map[string]bool{}
 	for _, form := range program.Children {
 		if isCallNamed(form, "defn") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
 			knownDefns[form.Children[1].Text] = true
+		}
+		if isCallNamed(form, "defstruct") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
+			knownStructs[form.Children[1].Text] = true
 		}
 	}
 
@@ -314,15 +383,23 @@ func EmitGo(program *Node) (string, error) {
 		if isCallNamed(form, "module") || isCallNamed(form, "export") || isCallNamed(form, "import") {
 			continue
 		}
-		if isCallNamed(form, "defn") {
-			def, err := emitGoDefn(form, knownDefns)
+		if isCallNamed(form, "defstruct") {
+			def, err := emitGoDefstruct(form, knownStructs)
 			if err != nil {
 				return "", err
 			}
 			defs = append(defs, def)
 			continue
 		}
-		return "", errors.New("emit_go: unsupported top-level form (v0 only understands defn, module, export, import)")
+		if isCallNamed(form, "defn") {
+			def, err := emitGoDefn(form, knownDefns, knownStructs)
+			if err != nil {
+				return "", err
+			}
+			defs = append(defs, def)
+			continue
+		}
+		return "", errors.New("emit_go: unsupported top-level form (v0 only understands defn, defstruct, module, export, import)")
 	}
 
 	var out strings.Builder
