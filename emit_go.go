@@ -35,6 +35,12 @@ import (
 // whole point of this target), so every emitted function name must be exported. kebab-case ->
 // PascalCase: split on '-', capitalize each segment's first rune, join.
 func mangleGo(name string) string {
+	// Real gap found live (PARENA/stdlib/datetime.prn's own is-leap-year?): a trailing `?`/`!`
+	// (the real, common Lisp predicate/mutation-sigil convention) produced an illegal Go
+	// identifier character, confirmed via a real `gofmt` failure ("illegal character U+003F
+	// '?'"). `src/emit.c`'s own C emitter already has the real, matching convention for this
+	// exact case (`?`/`!` -> `_`, same as `-`/`/`) — mirrored here rather than invented fresh.
+	name = strings.NewReplacer("?", "_", "!", "_").Replace(name)
 	parts := strings.Split(name, "-")
 	var b strings.Builder
 	for _, p := range parts {
@@ -121,6 +127,14 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 		return expr.Text, nil
 	}
 	if expr.Type == NodeSymbol {
+		// Real, genuine gap found live (PARENA/stdlib/datetime.prn's own is-leap-year?):
+		// bare `true`/`false` Bool literals have no handling at all here, so any real .prn
+		// function returning one hits "unknown identifier" rather than the correct Go literal.
+		// Checked before the local-param/known-defn lookup since neither a param nor a defn is
+		// ever actually named "true"/"false" in real PARENA source.
+		if expr.Text == "true" || expr.Text == "false" {
+			return expr.Text, nil
+		}
 		if !scope.localParams[expr.Text] && !scope.knownDefns[expr.Text] {
 			return "", errors.New("emit_go: unknown identifier '" + expr.Text + "' at line " + itoa(expr.Line))
 		}

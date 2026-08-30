@@ -202,3 +202,34 @@ func TestEmitGoKebabCaseParamName(t *testing.T) {
 		t.Errorf("multi-param real signature should be exported PascalCase fn, lowercase params: got %s", g)
 	}
 }
+
+// TestEmitGoBoolLiterals -- real gap found live building PARENA/stdlib/datetime.prn's own
+// is-leap-year?: bare true/false Bool literals had no handling at all in emitGoExpr's
+// NodeSymbol case, so any real .prn function returning one failed with "unknown identifier
+// 'false'" rather than emitting Go's own literal.
+func TestEmitGoBoolLiterals(t *testing.T) {
+	g, err := buildGo(t, "(defn always-true [] : Bool true)\n(defn always-false [] : Bool false)")
+	if err != nil {
+		t.Fatalf("bare true/false literals should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "return true") {
+		t.Errorf("expected a real Go `true` literal: got %s", g)
+	}
+	if !strings.Contains(g, "return false") {
+		t.Errorf("expected a real Go `false` literal: got %s", g)
+	}
+}
+
+// TestEmitGoPredicateNameMangling -- real gap found live alongside the bool-literal one above:
+// a trailing `?` (or `!`) in a defn name produced an illegal Go identifier character, confirmed
+// via a real `gofmt` failure ("illegal character U+003F '?'"). `src/emit.c`'s own C emitter
+// already mangles `?`/`!` to `_` (same as `-`/`/`) -- mirrored here, not invented fresh.
+func TestEmitGoPredicateNameMangling(t *testing.T) {
+	g, err := buildGo(t, "(defn is-leap-year? [(year : I32)] : Bool (= (mod year 4) 0))")
+	if err != nil {
+		t.Fatalf("a trailing '?' in a defn name should mangle to a legal Go identifier, not error: %v", err)
+	}
+	if !strings.Contains(g, "func IsLeapYear_(year int32) bool") {
+		t.Errorf("expected '?' mangled to '_' matching emit_c.go's own convention: got %s", g)
+	}
+}
