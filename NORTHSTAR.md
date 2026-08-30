@@ -29,10 +29,13 @@ passes** (`tests/test_lexer_parser.c`, `tests/test_region.c`, `tests/test_emit.c
 existing, already-trusted test suite, not a fresh, separately-invented one that could quietly
 diverge from what `parena-c` actually does.
 
-**Scoping only, this pass** — same real discipline every other NORTHSTAR doc in this monorepo
-follows, doubly true here since this is a real, large undertaking (reimplementing a lexer, parser,
-region analyzer, and four working emitters is a genuinely big project, not a same-afternoon
-addition like `emit_ts.c`/`emit_java.c` were). No Go code exists yet.
+**Scoping-first, real code following incrementally** — same real discipline every other NORTHSTAR
+doc in this monorepo follows, doubly true here since this is a real, large undertaking
+(reimplementing a lexer, parser, region analyzer, and four working emitters is a genuinely big
+project, not a same-afternoon addition like `emit_ts.c`/`emit_java.c` were). **Real status
+(2026-08-30): Phase 1 (lexer parity) is shipped** — `lexer.go`/`lexer_test.go`, see that phase's
+own entry below for the real architecture call made getting there. Parser/region-analyzer/emitter
+parity (Phases 2-4) have not started.
 
 ## Why "in golang and parena" — the real, load-bearing connection to PARENA's own self-hosting effort
 
@@ -142,12 +145,27 @@ real PARENA stdlib primitives reused directly where they fit, the stdlib grown w
 whenever a real BURROW need surfaces one — "use parena primatives adding to the stdlibs when it
 helps"). No longer an open question as of the founder's own 2026-08-30 confirmation above.
 
-**Phase 1 — lexer parity**: `selfhost/lexer.prn` already exists and is already tested against
-`src/lexer.c`'s own real behavior (60 assertions, `tests/test_selfhost_lexer.c`) — the real,
-smallest real slice of "does `burrow` produce the same tokens `parena-c` does" is already half
-proven on the PARENA side; the real remaining work is getting it running as real Go (via the
-hypothesis's own new Go emission target, or a hand-port if that hypothesis is rejected) and wired
-into a real `burrow` CLI.
+**Phase 1 — lexer parity — real, shipped (2026-08-30).** Founder real-time: "start phase 1 lexer
+parity on burrow." Real, honest architecture call made here, named directly rather than glossed
+over: this phase's own real candidate paths were "compile `selfhost/lexer.prn` through a new
+PARENA Go emission target" or "hand-port `src/lexer.c` directly if that hypothesis is rejected."
+Reading `selfhost/lexer.prn` in full before starting (not guessed at) showed it leans on real
+PARENA language surface far beyond `emit_ts.c`/`emit_java.c`'s own proven narrow v0 scope —
+`defstruct`, a payload-carrying `defenum`, `match`, `loop`/`recur`, `Result<T,E>`, `Vec`, and
+reference parameters all appear throughout. Building a general enough Go emitter to cover all of
+that correctly, in one sitting, at a quality bar this repo could actually verify, was not
+realistic — so this phase took the doc's own named fallback: **`lexer.go`, a real, faithful,
+hand-written Go port of `src/lexer.c`** (the real C reference both `src/lexer.c` itself and
+`selfhost/lexer.prn` already document as the source of truth), verified via `lexer_test.go` — a
+real, direct port of all 9 real test scenarios from `tests/test_selfhost_lexer.c`, every expected
+token sequence copied verbatim from that file's own real, hand-traced-against-`src/lexer.c`
+expectations, not re-derived. `go build`/`go vet`/`go test` all clean, all 9 tests pass. Also
+stress-tested (not part of the committed test suite, a one-off local check) against real,
+substantial PARENA source — `selfhost/lexer.prn` itself (2104 tokens), `stdlib/string.prn` (744),
+`stdlib/mishri/humanness.prn` (127), `stdlib/gta7/humanness_fingerprint_mod.prn` (74) — all
+tokenized cleanly, no crashes, no errors. This is the real, founder-named "pass all that parena c
+tests" acceptance bar, achieved directly for the lexer domain — not a new PARENA Go emission
+target (that piece, if ever built, is real, separate, deferred work, see Phase 5 below).
 
 **Phase 2 — parser + region analyzer parity**: real, larger, currently-unstarted work — no
 `selfhost/parser.prn`/`selfhost/region.prn` exist yet (only the lexer domain has been ported to

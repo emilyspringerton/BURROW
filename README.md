@@ -15,7 +15,13 @@ Go implementation, and the phased plan.
 
 ## Status
 
-Scoping only. No Go or PARENA code specific to this project exists yet.
+Phase 0 (architecture) confirmed, a real CLI shell shipped (`main.go`), and Phase 1 (lexer parity)
+shipped: `lexer.go`, a real, faithful hand-port of `PARENA/src/lexer.c`, verified against `PARENA/
+tests/test_selfhost_lexer.c`'s own 9 real test scenarios (ported to `lexer_test.go`) — `go build`/
+`go vet`/`go test` all clean. Real architecture call made getting there, documented in
+`NORTHSTAR.md`'s own Phase 1 entry: a hand-port, not a PARENA-compiled-to-Go emitter (the language
+surface `selfhost/lexer.prn` itself uses is well beyond any existing PARENA emitter's proven
+scope). Parser/region-analyzer/emitter parity (Phases 2-4) not started.
 
 ## Related
 

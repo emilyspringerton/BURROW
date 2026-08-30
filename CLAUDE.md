@@ -19,7 +19,12 @@ that same low-allocation discipline to `burrow`'s own Go implementation.
 
 ## Status
 
-Scoping only. No `emit_go` code exists yet.
+Real CLI shell shipped (`main.go`, full command parity with `parena`'s own surface). Phase 1
+(lexer parity) shipped: `lexer.go` + `lexer_test.go`, a real hand-port of `PARENA/src/lexer.c`
+verified against `PARENA/tests/test_selfhost_lexer.c`'s own real assertions — see `NORTHSTAR.md`'s
+own Phase 1 entry for the real architecture call (hand-port, not a PARENA-Go emitter — the
+language surface `selfhost/lexer.prn` needs is well beyond any existing PARENA emitter's proven
+scope). Parser/region-analyzer/emitter parity not started.
 
 ## Related Repos
 
