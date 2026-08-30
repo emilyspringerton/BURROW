@@ -2,13 +2,20 @@
 
 ## What this is
 
-PARENA's fourth real compilation target: Go, designed around a GC-off-safe host. New repo
-(2026-08-30, founder real-time: "can we build project BURROW the golang emitter where we design
-it to run with the gc turned off - upstream GITHUB created"). **Read `NORTHSTAR.md` before writing
-any code** — it has the full real scoping pass, including the honest answer to what "GC turned
-off" actually means for an emitter (a scope discipline on the generated code, not a language
-feature) and the real, Go-specific emitter differences from PARENA's own already-proven
-TypeScript/Java targets.
+A feature-for-feature parallel implementation of the PARENA compiler (`parena-c`'s own real
+lexer → parser → region analyzer → every emit target: C, TypeScript, Java), written in a real
+combination of Go and PARENA itself — corrected in real time from an initial, narrower mis-scope
+("just a new Go emission target bolted onto the existing C compiler"). New repo (2026-08-30,
+founder real-time: "can we build project BURROW the golang emitter where we design it to run with
+the gc turned off - upstream GITHUB created" → "project burrow is a feature for feature rewrite of
+the parena compiler in golang and parena" → "like the first test is can we write a pure golang and
+parena tool that still pass all that parena c tests" → "dog food it like write the golang in a way
+that doesnt allocate on the heap or whatever" → "use parena primatives adding to the stdlibs when
+it helps"). **Read `NORTHSTAR.md` before writing any code** — it has the full real scoping pass:
+the founder-named acceptance bar (pass `parena-c`'s own real test corpus), the real relationship
+to PARENA's own already-in-progress self-hosting effort (`selfhost/*.prn`), the GC-off design for
+the new native Go emission target this project would add, and the dogfooding directive extending
+that same low-allocation discipline to `burrow`'s own Go implementation.
 
 ## Status
 

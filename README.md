@@ -1,21 +1,26 @@
 # BURROW
 
-PARENA's fourth real compilation target: Go, designed around a GC-off-safe host.
+A feature-for-feature parallel implementation of the PARENA compiler (`parena-c`'s own real
+lexer → parser → region analyzer → every emit target), written in a real combination of Go and
+PARENA itself — not a new backend bolted onto the existing C compiler, a full rewrite proven
+against it.
 
-New repo (2026-08-30), NORTHSTAR only — no emitter code yet. See `NORTHSTAR.md` for the full real
-scoping pass: what "designed to run with the gc turned off" actually means for an emitter (not a
-special codegen mode — a scope discipline: v0-scope generated functions never allocate on the Go
-heap, so a host that disables GC around calls into them is making a real, safe, informed choice),
-the real Go-specific emitter differences from PARENA's own existing TypeScript/Java targets
-(`if`-as-immediately-invoked-closure, conditional `math/rand` import), and the phased plan.
+New repo (2026-08-30), NORTHSTAR only — no code yet. See `NORTHSTAR.md` for the full real scoping
+pass: the real, founder-named acceptance bar ("can we write a pure golang and parena tool that
+still pass all that parena c tests" — real behavioral parity against `parena-c`'s own existing
+test corpus, not a freshly-invented one), the real relationship to PARENA's own already-in-progress
+self-hosting effort (`selfhost/*.prn`), the GC-off design for BURROW's own new native Go emission
+target, the "dogfood it" directive extending that same low-allocation discipline to `burrow`'s own
+Go implementation, and the phased plan.
 
 ## Status
 
-Scoping only. `PARENA/src/emit_ts.c` and `PARENA/src/emit_java.c` are the real, proven v0 emitter
-template this project follows — read `NORTHSTAR.md` before writing any `emit_go` code.
+Scoping only. No Go or PARENA code specific to this project exists yet.
 
 ## Related
 
-- `PARENA` — the language and compiler this is a fourth target for.
-- `GoblinFoxDragon` — the named candidate real Go host (not committed to yet, see `NORTHSTAR.md`).
+- `PARENA` — the compiler this is a full, parallel rewrite of; `selfhost/*.prn` is the real,
+  already-started self-hosting source tree this project leans on directly.
+- `GoblinFoxDragon` — the named candidate real Go host for the GC-off-safe Go emission target
+  (Phase 5 in `NORTHSTAR.md`, not committed to yet).
 - `EMILY` — RSI loop / backlog coordination for cross-repo work.
