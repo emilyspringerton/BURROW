@@ -27,17 +27,21 @@ hand-port, not a PARENA-compiled-to-Go emitter (the language surface `selfhost/l
 uses is well beyond any existing PARENA emitter's proven scope). Region-analyzer/emitter parity
 (Phases 3-4) not started.
 
-Also see `DUNG.md`: a new, real sub-project scoped this same session — "the BURROW editor," a
-unified terminal emulator + editor rewriting `PITVIPER` and PARENA's own `stdlib/editor/*.prn`
-into one Go+PARENA application, with a real, already-written UX foundation adopted directly from
-`EmilyOS/docs/legacy-archive/gui-v0.1-design-capture.md`. Scoping only, no DUNG code yet.
+**`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`) — "the BURROW editor," a
+unified terminal emulator + editor rewriting `PITVIPER` and PARENA's own `stdlib/editor/*.prn`.
+Real, load-bearing relationship to this repo: DUNG's own real build compiles its ground-up PARENA
+editor source via the real `burrow` CLI this repo builds — DUNG is BURROW's own real, live,
+flagship dogfooding consumer, and its own build is gated on this repo's own Phase 3-4 (region
+analyzer + emitter parity, not started) landing enough real emit capability. First scoped inside
+this repo (`DUNG.md`, now removed), corrected by the founder into its own standalone, Bazel-built
+repo — see `DUNG/NORTHSTAR.md` there for the full real scoping pass.
 
 ## Related
 
 - `PARENA` — the compiler this is a full, parallel rewrite of; `selfhost/*.prn` is the real,
   already-started self-hosting source tree this project leans on directly.
-- `PITVIPER`, `PARENA/stdlib/editor/*.prn`, `EmilyOS` — the real things DUNG (see `DUNG.md`)
-  rewrites and draws its UX foundation from.
+- `DUNG` — the real, separate repo whose own build depends on this repo's own emit capability
+  (Phase 3-4) — see above.
 - `GoblinFoxDragon` — the named candidate real Go host for the GC-off-safe Go emission target
   (Phase 6 in `NORTHSTAR.md`, not committed to yet).
 - `EMILY` — RSI loop / backlog coordination for cross-repo work.

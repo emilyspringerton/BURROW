@@ -233,5 +233,9 @@ real Go backend as the named candidate host (not committed to).
   emitter template Phase 6's own Go emission target (if built) would still follow.
 - `GoblinFoxDragon` — the real, named candidate host for a GC-off-safe PARENA-compiled decision
   layer (Phase 6, not committed to).
+- `DUNG` — its own real, separate repo (first scoped inside this repo as `DUNG.md`, moved by
+  founder correction), "the BURROW editor" — its own real build depends directly on this repo's
+  own Phase 3-4 (region analyzer + emitter parity) landing, making it this project's own real,
+  live, flagship dogfooding consumer once that ships.
 - `PAPERCRAFT/docs/NORTHSTAR_WEB_CLIENT.md` — the same-session precedent this doc's own "scoping
   pass before code" structure follows.
