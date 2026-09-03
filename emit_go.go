@@ -127,6 +127,29 @@ type emitGoScope struct {
 	// same way emitCScope carries context uniformly rather than growing a special-cased
 	// signature for one caller.
 	retType string
+	// knownEnumVariants — real, new (kanban card 9988's own next-named prerequisite after
+	// match/Result/loop/Vec: "defenum... struct construction... unstarted"). A flat, global
+	// lookup by bare variant name, deliberately NOT qualified by enum name -- the exact same
+	// real, flat namespace PARENA's own reference C emitter uses (src/emit.c's own
+	// find_enum_variant(expr->text, &variant) looks up by variant name alone), confirmed by
+	// reading that function directly before choosing this shape rather than inventing a
+	// per-enum-qualified one.
+	knownEnumVariants map[string]goEnumVariantInfo
+}
+
+// goEnumVariantInfo — a registered defenum variant's own real, resolved Go identity: which
+// enum's Go struct type it belongs to, its own real tag index (matching PARENA's own reference
+// C emitter's `variants[i].tag_value = (int)i`, assigned in declaration order), and whether it
+// carries a payload. Real, deliberate v0 boundary, mirrored directly from `src/emit.c`'s own
+// process_defenum: only zero- or single-field variants are supported (a single field's own real
+// type is never resolved/type-checked, boxed through `any` the same generic way Result/Option's
+// own payload already is) -- a 2+-field variant is a real, separate, unstarted extension, same
+// as the C target's own honestly-scoped "single-payload defenum in this stdlib" limitation.
+type goEnumVariantInfo struct {
+	EnumName    string // the enum's own real, mangled Go struct type name
+	VariantName string // the variant's own real, un-mangled PARENA name (for error messages)
+	Tag         int
+	HasPayload  bool
 }
 
 // goDefnRetInfo — a known defn's own Result/Option payload/error types, in real, already-resolved
@@ -228,6 +251,17 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 		// `false` are also real bare-symbol literals with no local/defn binding behind them.
 		if expr.Text == "None" {
 			return "Option{Tag: 0, Value: nil}", nil
+		}
+		// A bare, zero-payload user defenum variant (e.g. `OpenFailed`) -- real, new capability,
+		// same "checked before generic identifier lookup" treatment `None` above already gets,
+		// since it's a real value CONSTRUCTOR, not a local variable reference. Direct port of
+		// `src/emit.c`'s own real "a bare zero-payload defenum variant" case (see emitGoDefenum's
+		// own doc comment). A variant declared WITH a payload can't be referenced bare -- it must
+		// be called with its one argument, handled in the call-form dispatch below -- so this
+		// only ever matches `!HasPayload`, letting a bare reference to a payload-carrying variant
+		// fall through to the real "unknown identifier" error instead of silently mis-emitting.
+		if v, ok := scope.knownEnumVariants[expr.Text]; ok && !v.HasPayload {
+			return v.EnumName + "_" + mangleGo(v.VariantName) + "()", nil
 		}
 		if !scope.localParams[expr.Text] && !scope.knownDefns[expr.Text] {
 			return "", errors.New("emit_go: unknown identifier '" + expr.Text + "' at line " + itoa(expr.Line))
@@ -625,6 +659,25 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 		}
 		fieldName := strings.TrimPrefix(expr.Children[2].Text, ":")
 		return "(" + recordE + ")." + mangleGo(fieldName), nil
+	}
+
+	// A payload-carrying user defenum variant CALL, e.g. `(OpenFailed msg)` -- real, new
+	// capability, direct sibling of the bare zero-payload case above and of Ok/Err/Some's own
+	// construction handling earlier in this function. Checked before the generic defn-call
+	// fallback below (a variant name is never also a real defn name in practice, but checking
+	// here first makes that a real, structural guarantee, not just a convention).
+	if v, ok := scope.knownEnumVariants[head]; ok {
+		if !v.HasPayload {
+			return "", errors.New("emit_go: '" + v.VariantName + "' is a zero-payload defenum variant, called with an argument at line " + itoa(expr.Line))
+		}
+		if len(expr.Children) != 2 {
+			return "", errors.New("emit_go: '" + v.VariantName + "' requires exactly 1 argument")
+		}
+		inner, err := emitGoExpr(expr.Children[1], scope)
+		if err != nil {
+			return "", err
+		}
+		return v.EnumName + "_" + mangleGo(v.VariantName) + "(" + inner + ")", nil
 	}
 
 	// Otherwise: a real call to another top-level defn in the same generated package -- real,
@@ -1126,13 +1179,73 @@ func emitGoDefstruct(ds *Node, knownStructs map[string]bool) (string, error) {
 	return "type " + typeName + " struct {\n" + fields.String() + "}", nil
 }
 
-func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]bool, defnRetInfo map[string]goDefnRetInfo) (string, error) {
+// emitGoDefenum — real, new capability (kanban card 9988, "defenum" -- the next-named real
+// prerequisite after match/Result/loop/Vec). Real, direct generalization of Result/Option's own
+// already-established `{Tag int; Value any}` shape (see EmitGo's own doc comment on why that
+// shape is fixed, not per-instantiation) to an arbitrary user-defined tagged union -- the exact
+// same real design PARENA's own reference C emitter already uses for a defenum (`src/emit.c`'s
+// own process_defenum: "a tag enum plus a struct reusing Result/Option's own {tag; void *value;}
+// shape... a deliberate, honest generalization"), ported here rather than invented fresh. One
+// real, exported constructor function per variant (`EnumName_VariantName`), matching the C
+// target's own `EnumName_VariantName()` naming exactly (just PascalCase instead of C's
+// underscore-joined convention) -- a zero-payload variant takes no arguments, a single-payload
+// variant takes one `any`-boxed argument, mirroring Ok/Err/Some's own real boxing.
+//
+// Real, deliberate v0 boundary, named explicitly, not silently limited: only zero- or
+// single-field variants are supported (a 2+-field variant is a real, separate, unstarted
+// extension -- the same real, honest limitation `src/emit.c`'s own comment names for "every
+// currently-real single-payload defenum in this stdlib"). `match` against a user-defenum-typed
+// scrutinee is ALSO real, separate, unstarted work (this pass only adds real value
+// CONSTRUCTION, the same real "one bounded slice at a time" discipline `loop`/`Vec` before it
+// already followed) -- a real, useful increment on its own even so: a function returning
+// `(Result Payload MyError)` can now really construct `(Err SomeVariant)`, even though the
+// caller can't yet `match` on WHICH variant came back (only Ok-vs-Err, matching every real
+// Result/Option `match` this target already supports).
+func emitGoDefenum(de *Node) (defText string, variants map[string]goEnumVariantInfo, err error) {
+	if len(de.Children) < 3 || de.Children[1].Type != NodeSymbol {
+		return "", nil, errors.New("emit_go: defenum: malformed definition")
+	}
+	enumName := mangleGo(de.Children[1].Text)
+	variantForms := de.Children[2:]
+	variants = map[string]goEnumVariantInfo{}
+	var b strings.Builder
+	b.WriteString("type " + enumName + " struct {\n\tTag   int\n\tValue any\n}\n\n")
+	for i, v := range variantForms {
+		if v.Type != NodeList || len(v.Children) < 1 || v.Children[0].Type != NodeSymbol {
+			return "", nil, errors.New("emit_go: defenum: variant at line " + itoa(v.Line) +
+				" must be (Name) or (Name (field : Type))")
+		}
+		variantName := v.Children[0].Text
+		fieldCount := len(v.Children) - 1
+		if fieldCount > 1 {
+			return "", nil, errors.New("emit_go: defenum: variant '" + variantName +
+				"' has more than 1 field (v0 only supports zero- or single-field variants)")
+		}
+		hasPayload := fieldCount == 1
+		ctorName := enumName + "_" + mangleGo(variantName)
+		if hasPayload {
+			b.WriteString("func " + ctorName + "(v0 any) " + enumName + " {\n\treturn " + enumName +
+				"{Tag: " + itoa(i) + ", Value: v0}\n}\n\n")
+		} else {
+			b.WriteString("func " + ctorName + "() " + enumName + " {\n\treturn " + enumName +
+				"{Tag: " + itoa(i) + "}\n}\n\n")
+		}
+		if _, dup := variants[variantName]; dup {
+			return "", nil, errors.New("emit_go: defenum: variant '" + variantName +
+				"' declared more than once in enum '" + de.Children[1].Text + "'")
+		}
+		variants[variantName] = goEnumVariantInfo{EnumName: enumName, VariantName: variantName, Tag: i, HasPayload: hasPayload}
+	}
+	return strings.TrimRight(b.String(), "\n"), variants, nil
+}
+
+func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]bool, defnRetInfo map[string]goDefnRetInfo, knownEnumVariants map[string]goEnumVariantInfo) (string, error) {
 	if len(defn.Children) < 3 || defn.Children[1].Type != NodeSymbol || defn.Children[2].Type != NodeVec {
 		return "", errors.New("emit_go: defn: malformed function definition")
 	}
 	fnName := mangleGo(defn.Children[1].Text)
 	params := defn.Children[2]
-	scope := &emitGoScope{knownDefns: knownDefns, localParams: map[string]bool{}, defnRetInfo: defnRetInfo}
+	scope := &emitGoScope{knownDefns: knownDefns, localParams: map[string]bool{}, defnRetInfo: defnRetInfo, knownEnumVariants: knownEnumVariants}
 
 	var paramList strings.Builder
 	for i, param := range params.Children {
@@ -1247,12 +1360,31 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]
 func EmitGo(program *Node) (string, error) {
 	knownDefns := map[string]bool{}
 	knownStructs := map[string]bool{}
+	// knownEnumVariants -- real, new (kanban card 9988's defenum port), collected in this same
+	// up-front pass for the same real reason knownDefns/knownStructs already are: a defn's own
+	// body can reference a variant declared LATER in the same file (Go itself doesn't care about
+	// declaration order; this emitter's own resolution does). A registered enum's own name is
+	// ALSO folded into `knownStructs` here -- real, deliberate reuse, not a naming mistake:
+	// resolveGoType's job for a struct name and an enum name is identical (resolve to the type's
+	// own mangled Go name), so a defenum can be used anywhere a defstruct already could be
+	// (a Result's own ErrorType, a param/return type) with zero new plumbing.
+	knownEnumVariants := map[string]goEnumVariantInfo{}
 	for _, form := range program.Children {
 		if isCallNamed(form, "defn") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
 			knownDefns[form.Children[1].Text] = true
 		}
 		if isCallNamed(form, "defstruct") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
 			knownStructs[form.Children[1].Text] = true
+		}
+		if isCallNamed(form, "defenum") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
+			knownStructs[form.Children[1].Text] = true
+			_, variants, err := emitGoDefenum(form)
+			if err != nil {
+				return "", err
+			}
+			for name, info := range variants {
+				knownEnumVariants[name] = info
+			}
 		}
 	}
 
@@ -1290,15 +1422,29 @@ func EmitGo(program *Node) (string, error) {
 			defs = append(defs, def)
 			continue
 		}
-		if isCallNamed(form, "defn") {
-			def, err := emitGoDefn(form, knownDefns, knownStructs, defnRetInfo)
+		if isCallNamed(form, "defenum") {
+			// Real, deliberate re-parse (not a cache of the first pass's own result): this
+			// function's own error-checking already ran once above to build knownEnumVariants,
+			// so a second real failure here would be unreachable in practice -- kept anyway
+			// rather than threading a partial `map[*Node]string` cache through, since parsing a
+			// defenum a second time is cheap and this keeps emitGoDefenum's own single, simple
+			// signature the only one that exists.
+			def, _, err := emitGoDefenum(form)
 			if err != nil {
 				return "", err
 			}
 			defs = append(defs, def)
 			continue
 		}
-		return "", errors.New("emit_go: unsupported top-level form (v0 only understands defn, defstruct, module, export, import)")
+		if isCallNamed(form, "defn") {
+			def, err := emitGoDefn(form, knownDefns, knownStructs, defnRetInfo, knownEnumVariants)
+			if err != nil {
+				return "", err
+			}
+			defs = append(defs, def)
+			continue
+		}
+		return "", errors.New("emit_go: unsupported top-level form (v0 only understands defn, defstruct, defenum, module, export, import)")
 	}
 
 	var out strings.Builder

@@ -349,6 +349,22 @@ loop+`vec/push!`, reading it back via `vec/len`+`vec/get`+`deref`, compiled/link
 sums for n=0,5,10. Still real, honest, unstarted: `defenum`, struct construction,
 `(Vec SomeStruct)` element types, and `loop`/`match` beyond their own current v0 boundaries.
 
+**`defenum` shipped (2026-09-03)**, cruise-queue card 9988's own next-named prerequisite after
+`match`/`Result`/`loop`/`Vec`. Real, direct generalization of Result/Option's own already-
+established `{Tag int; Value any}` shape to an arbitrary user-defined tagged union — the exact
+same real design PARENA's own reference C emitter already uses for a `defenum`, ported here
+rather than invented fresh. One real, exported constructor per variant
+(`EnumName_VariantName`). **Real, deliberate v0 boundary**: only zero- or single-field variants
+are supported (a 2+-field variant is real, separate, unstarted work, matching `src/emit.c`'s own
+honest limitation); `match` against a user-`defenum`-typed scrutinee is ALSO real, separate,
+unstarted — this pass only adds real value CONSTRUCTION. `go test`: 99/99 (6 new). **Real, live,
+end-to-end proof**: a real `ParseError` `defenum` (a zero-payload and a single-payload variant)
+used as a `Result`'s own `ErrorType`, constructed both ways, consumed via the already-shipped
+`match` — compiled/linked/run, correct output for all three real cases. Still real, honest,
+unstarted: struct construction, `(Vec SomeStruct)` element types, `match` on a user `defenum`,
+and `loop`/`match` beyond their own current v0 boundaries — the literal cruise-queue-card-9988
+CLI deliverable itself still hasn't been started.
+
 ## Real risks and open questions, named honestly
 
 - **Scale**: this is a genuinely large project relative to everything else built this same

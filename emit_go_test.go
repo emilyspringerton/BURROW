@@ -831,3 +831,142 @@ func main() {
 		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
 	}
 }
+
+// TestEmitGoDefenumZeroPayloadVariant and its siblings below verify real, new `defenum` support
+// (kanban card 9988's own next-named prerequisite after match/Result/loop/Vec).
+func TestEmitGoDefenumZeroPayloadVariant(t *testing.T) {
+	g, err := buildGo(t, "(defenum ParseError (EmptyInput) (Invalid (msg : String)))\n"+
+		"(defn empty-error [] : ParseError EmptyInput)")
+	if err != nil {
+		t.Fatalf("zero-payload defenum variant reference should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "type ParseError struct {") {
+		t.Errorf("defenum should emit a real, exported Go struct type: got %s", g)
+	}
+	if !strings.Contains(g, "func ParseError_EmptyInput() ParseError {") {
+		t.Errorf("zero-payload variant should get a real, real, no-arg constructor: got %s", g)
+	}
+	if !strings.Contains(g, "return ParseError_EmptyInput()") {
+		t.Errorf("bare zero-payload variant reference should call its own constructor: got %s", g)
+	}
+}
+
+func TestEmitGoDefenumSinglePayloadVariant(t *testing.T) {
+	g, err := buildGo(t, "(defenum ParseError (EmptyInput) (Invalid (msg : String)))\n"+
+		"(defn too-big [] : ParseError (Invalid \"too big\"))")
+	if err != nil {
+		t.Fatalf("single-payload defenum variant call should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "func ParseError_Invalid(v0 any) ParseError {") {
+		t.Errorf("single-payload variant should get a real, one-arg constructor: got %s", g)
+	}
+	if !strings.Contains(g, `return ParseError_Invalid("too big")`) {
+		t.Errorf("payload-carrying variant call should pass its own argument through: got %s", g)
+	}
+}
+
+func TestEmitGoDefenumZeroPayloadCalledWithArgIsError(t *testing.T) {
+	_, err := buildGo(t, "(defenum ParseError (EmptyInput) (Invalid (msg : String)))\n"+
+		"(defn bad [] : ParseError (EmptyInput \"oops\"))")
+	if err == nil {
+		t.Fatal("calling a zero-payload variant with an argument should be a real, honest compile error, not silently mis-emitted")
+	}
+}
+
+func TestEmitGoDefenumMultiFieldVariantIsError(t *testing.T) {
+	_, err := buildGo(t, "(defenum Bad (TwoFields (a : I32) (b : I32)))")
+	if err == nil {
+		t.Fatal("a 2+-field defenum variant is a real, deliberate v0 boundary and should error, not silently mis-emit")
+	}
+}
+
+func TestEmitGoDefenumInResultErrorPosition(t *testing.T) {
+	g, err := buildGo(t, "(defenum ParseError (EmptyInput) (Invalid (msg : String)))\n"+
+		"(defn parse-positive [(n : I32)] : (Result I32 ParseError)\n"+
+		"  (if (<= n 0) (Err EmptyInput)\n"+
+		"    (if (> n 100) (Err (Invalid \"too big\")) (Ok n))))")
+	if err != nil {
+		t.Fatalf("a registered defenum should be usable as a Result's own ErrorType: %v", err)
+	}
+	if !strings.Contains(g, "func ParsePositive(n int32) Result {") {
+		t.Errorf("Result return type should still resolve to the real, fixed Result Go type: got %s", g)
+	}
+}
+
+// TestEmitGoDefenumEndToEndBuildsAndRuns — real, live proof, not just unit tests: a real defenum
+// used as a Result's own ErrorType, constructed via both a bare zero-payload reference and a
+// payload-carrying call, consumed via the same real `match` this target already supports
+// (Ok-vs-Err only -- matching WHICH error variant came back is real, separate, unstarted work,
+// named explicitly in emitGoDefenum's own doc comment).
+func TestEmitGoDefenumEndToEndBuildsAndRuns(t *testing.T) {
+	src := "(module enum-e2e)\n(export describe)\n" +
+		"(defenum ParseError\n  (EmptyInput)\n  (Invalid (msg : String)))\n" +
+		"(defn parse-positive [(n : I32)] : (Result I32 ParseError)\n" +
+		"  (if (<= n 0) (Err EmptyInput)\n" +
+		"    (if (> n 100) (Err (Invalid \"too big\")) (Ok n))))\n" +
+		"(defn describe [(n : I32)] : I32\n" +
+		"  (match (parse-positive n)\n" +
+		"    ((Ok v) v)\n" +
+		"    ((Err e) -1)))\n"
+
+	program, err := ParseProgram(src)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if err := RegionAnalyze(program); err != nil {
+		t.Fatalf("unexpected region-analyze error: %v", err)
+	}
+	g, err := EmitGo(program)
+	if err != nil {
+		t.Fatalf("unexpected emit error: %v", err)
+	}
+
+	dir := t.TempDir()
+	pkgDir := dir + "/burrowgen"
+	if err := os.Mkdir(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pkgDir+"/gen.go", []byte(g), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/go.mod", []byte("module enume2e\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainSrc := `package main
+
+import (
+	"fmt"
+
+	"enume2e/burrowgen"
+)
+
+func main() {
+	fmt.Println(burrowgen.Describe(5))
+	fmt.Println(burrowgen.Describe(0))
+	fmt.Println(burrowgen.Describe(500))
+}
+`
+	if err := os.WriteFile(dir+"/main.go", []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binPath := dir + "/bin"
+	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
+	buildCmd.Dir = dir
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("emitted Go failed to build (this is a real bug in emit_go.go, not the test): %v\n%s", err, out)
+	}
+
+	runCmd := exec.Command(binPath)
+	out, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the built binary failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	// describe(5)=5 (real Ok), describe(0)=-1 (EmptyInput -> Err), describe(500)=-1 (Invalid -> Err).
+	want := "5\n-1\n-1\n"
+	if got != want {
+		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
+	}
+}

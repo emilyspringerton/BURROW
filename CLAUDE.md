@@ -258,6 +258,44 @@ this target's own real, live, first host, not `GoblinFoxDragon` (still just a na
 committed to) — Phase 6's own "no real host has asked for this yet" precondition is real, past
 tense now.
 
+**`defenum` added to the Go emission target** (2026-09-03, cruise-queue card 9988's own
+next-named prerequisite after match/Result/loop/Vec). Real, direct generalization of Result/
+Option's own already-established `{Tag int; Value any}` shape to an arbitrary user-defined
+tagged union — the exact same real design PARENA's own reference C emitter already uses for a
+`defenum` (`src/emit.c`'s own `process_defenum`: "a tag enum plus a struct reusing Result/
+Option's own {tag; void *value;} shape... a deliberate, honest generalization"), ported here
+rather than invented fresh. One real, exported constructor function per variant
+(`EnumName_VariantName`), matching the C target's own naming convention (PascalCase instead of
+underscore-joined). A registered `defenum`'s own name is folded into the SAME `knownStructs` map
+`defstruct` already populates — real, deliberate reuse, since `resolveGoType`'s job for a struct
+name and an enum name is identical, so a `defenum` is usable anywhere a `defstruct` already was
+(a `Result`'s own `ErrorType`, a param/return type) with zero new plumbing.
+
+**Real, deliberate v0 boundary, named explicitly, not silently limited**: only zero- or
+single-field variants are supported (a 2+-field variant is a real, separate, unstarted
+extension, the same honest limitation `src/emit.c`'s own comment already names for "every
+currently-real single-payload defenum in this stdlib"). `match` against a user-`defenum`-typed
+scrutinee is ALSO real, separate, unstarted work — this pass only adds real value
+CONSTRUCTION, the same "one bounded slice at a time" discipline `loop`/`Vec` before it already
+followed. Still a real, useful increment on its own: a function returning
+`(Result Payload MyError)` can now really construct `(Err SomeVariant)`, even though a caller
+can't yet `match` on WHICH variant came back (only Ok-vs-Err, matching every real Result/Option
+`match` this target already supports).
+
+`go test`: 99/99 total (6 new — a bare zero-payload variant reference, a payload-carrying
+variant call, the zero-payload-called-with-an-argument error, the 2+-field-variant v0-boundary
+error, a `defenum` used in a `Result`'s own `ErrorType` position, and a real end-to-end
+`go build`-and-run test). **Real, live, end-to-end proof, not just unit tests**: a real
+`ParseError` `defenum` (`EmptyInput` zero-payload, `Invalid` single-payload) used as a
+`Result`'s own `ErrorType`, constructed via both shapes, and consumed via a real, already-shipped
+`match` (Ok-vs-Err) — compiled via `burrow build`, linked into a real, separate Go module via
+`go build`, and run: correct output for `describe(5)=5` (real `Ok`), `describe(0)=-1`
+(`EmptyInput` → `Err`), `describe(500)=-1` (`Invalid` → `Err`). Still real, honest, unstarted:
+struct construction, `(Vec SomeStruct)` element types, `match` on a user `defenum`, and `loop`/
+`match` beyond their own current v0 boundaries — cruise-queue card 9988's own literal CLI
+deliverable still hasn't been started; this and the prior passes are real, necessary language-
+feature prerequisites, not the deliverable itself.
+
 ## Related Repos
 
 - `PARENA` — the language and compiler this is a fourth compilation target for; `src/emit_ts.c`
