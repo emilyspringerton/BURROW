@@ -312,6 +312,35 @@ overwrite-refusal case). Real, live, end-to-end proof, not just unit tests: ran 
 built `burrow` binary (`burrow new demo_mod`) in a real scratch directory, then `go run .`
 against the result — printed the real, correct `Hello from demo_mod!`.
 
+**`burrow new` also generates real Bazel files by default** (2026-09-03, kanban priority-queue
+card `PX-333`: "PARENA SCAFFOLD NEW NEEDS TO GENERATE BAZEL BY DEFAULT WE WILL FIGURE OUT A
+FALLBACK LATER"). This repo itself gained a real `MODULE.bazel`/`BUILD.bazel` first (exposing
+`@burrow//:burrow` as a `go_binary`, mirroring PARENA's own real `@parena//src:parena`
+precedent exactly) — the one thing needed to make a scaffolded project's own generated
+`BUILD.bazel` genrule actually resolvable. **Real, genuine, pre-existing bug found live while
+verifying this, not caused by this pass**: a fresh clone of this repo failed to build at all —
+`main.go` (already committed, long before this session) references `LoParseProgram`, but
+`lo_lexer.go`/`lo_parser.go` (where it's defined), `lo_parser_test.go`, and `unparse.go` were
+never actually pushed to git (546 real, legitimate lines of LO-integration work, matching this
+repo's own already-documented LO thread — every session so far worked fine locally because
+these files already existed on disk in this persistent sandbox, masking the real, broken
+published state). Fixed by committing them for real.
+
+`burrow new <name>` now also writes a real `MODULE.bazel` (`bazel_dep`/`git_override` pinning a
+real, known-good BURROW commit — `burrowPinnedCommit`, the same real "pin now, bump later"
+convention `ladybug`/`DUNG`/`longma`'s own `MODULE.bazel` files already use for `@parena`) and a
+real `BUILD.bazel` (a `genrule` invoking `@burrow//:burrow build`, feeding a plain `rules_go`
+`go_library`/`go_binary`). Real, deliberate design: this does NOT replace the existing plain
+`go build`/`go run` path — the card's own "we will figure out a fallback later" framing is
+already satisfied by that path continuing to work unchanged, Bazel is additive, not a
+replacement. `go test`: still 101/101 (extended, not added to, since a real Bazel invocation
+fetching `@burrow` fresh from GitHub takes over a minute — too slow for a routine `go test`; the
+existing test instead checks the generated file CONTENT references a real, existing pinned
+commit). **Real, live, end-to-end proof, not just a unit test**: ran `bazel run //:<name>`
+against a freshly-scaffolded project in a real scratch directory — Bazel fetched `@burrow` from
+GitHub at the pinned commit, the genrule correctly invoked it to compile the `.prn` file, and the
+resulting binary printed the real, correct `Hello from demo_bazel2!`.
+
 ## Related Repos
 
 - `PARENA` — the language and compiler this is a fourth compilation target for; `src/emit_ts.c`

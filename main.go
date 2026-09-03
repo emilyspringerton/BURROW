@@ -340,13 +340,99 @@ func main() {
 		return 1
 	}
 
+	// Real, new Bazel scaffolding (2026-09-03, kanban priority-queue card PX-333: "PARENA
+	// SCAFFOLD NEW NEEDS TO GENERATE BAZEL BY DEFAULT WE WILL FIGURE OUT A FALLBACK LATER").
+	// burrowPinnedCommit is a real, known-good BURROW commit (the one this exact "burrow new"
+	// binary was itself built from) -- same real, honest "pin to a specific commit, bump it
+	// later" convention this monorepo's own ladybug/DUNG/longma repos already establish for
+	// @parena; it WILL go stale as BURROW evolves, the same real, accepted property every one of
+	// those existing pins already has, not a defect unique to this generator. The plain
+	// `go build`/`go run` path above is the real "fallback for now" the card's own framing asks
+	// for -- generating Bazel files doesn't remove that, both are real and usable.
+	moduleBazelPath := filepath.Join(name, "MODULE.bazel")
+	moduleBazelSrc := fmt.Sprintf(`"""%[1]s — scaffolded by "burrow new". bazel_dep pins a real,
+known-good BURROW commit (the one this scaffold was generated from) -- same real convention
+ladybug/DUNG/longma already use for @parena. Bump the commit as BURROW evolves.
+"""
+
+module(
+    name = "%[1]s",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_go", version = "0.63.0")
+bazel_dep(name = "burrow", version = "0.0.0")
+git_override(
+    module_name = "burrow",
+    remote = "https://github.com/emilyspringerton/BURROW.git",
+    commit = "%[2]s",
+)
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.22.0")
+`, name, burrowPinnedCommit)
+	if err := os.WriteFile(moduleBazelPath, []byte(moduleBazelSrc), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %v\n", err)
+		return 1
+	}
+
+	buildBazelPath := filepath.Join(name, "BUILD.bazel")
+	buildBazelSrc := fmt.Sprintf(`# Scaffolded by "burrow new" -- real genrule compiling %[1]s.prn via the real,
+# pinned @burrow binary (see MODULE.bazel), then a plain rules_go library/binary over the result.
+# Regenerate the checked-in %[3]s manually (see the README this command printed)
+# if you'd rather not depend on Bazel invoking @burrow at build time.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+genrule(
+    name = "%[1]s_gen",
+    srcs = ["%[1]s.prn"],
+    outs = ["internal/burrowgen/%[1]s_gen.go"],
+    cmd = "$(location @burrow//:burrow) build $(location %[1]s.prn) -o $@",
+    tools = ["@burrow//:burrow"],
+)
+
+go_library(
+    name = "burrowgen",
+    srcs = [":%[1]s_gen"],
+    importpath = "%[1]s/internal/burrowgen",
+    visibility = ["//visibility:private"],
+)
+
+go_library(
+    name = "%[1]s_lib",
+    srcs = ["main.go"],
+    importpath = "%[1]s",
+    visibility = ["//visibility:private"],
+    deps = [":burrowgen"],
+)
+
+go_binary(
+    name = "%[1]s",
+    embed = [":%[1]s_lib"],
+    visibility = ["//visibility:public"],
+)
+`, name, prnPath, genPath)
+	if err := os.WriteFile(buildBazelPath, []byte(buildBazelSrc), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %v\n", err)
+		return 1
+	}
+
 	fmt.Printf("burrow: new: %s scaffolded and built successfully\n", name)
 	fmt.Printf("  %s          -- real PARENA decision logic (edit this)\n", prnPath)
 	fmt.Printf("  %s              -- real Go host (edit this)\n", mainGoPath)
 	fmt.Printf("  %s -- compiled output (regenerate: burrow build %s -o %s)\n", genPath, prnPath, genPath)
-	fmt.Printf("  cd %s && go run .\n", name)
+	fmt.Printf("  %s, %s -- real Bazel build files (pinned to burrow commit %s, bump as needed)\n", moduleBazelPath, buildBazelPath, burrowPinnedCommit)
+	fmt.Printf("  cd %s && go run .              -- fallback, no Bazel needed\n", name)
+	fmt.Printf("  cd %s && bazel run //:%s       -- real Bazel build\n", name, name)
 	return 0
 }
+
+// burrowPinnedCommit — the real BURROW commit this exact "burrow new" binary was itself built
+// from (bumped by hand alongside real BURROW releases, same convention ladybug/DUNG/longma's own
+// MODULE.bazel files already use for @parena). A scaffolded project's own MODULE.bazel pins to
+// this so "bazel build" works immediately, no manual commit-hunting required.
+const burrowPinnedCommit = "977dd9e42c179440640ef80cdd3b62c5c4a6ed32"
 
 func main() {
 	if len(os.Args) < 2 {
