@@ -149,3 +149,58 @@ func TestEmitCUnknownCallIsError(t *testing.T) {
 	}
 }
 
+// TestEmitCDefstructAndGetField -- real, new capability (2026-09-03), closing the exact real
+// boundary DUNG/parena/rect_probe.prn found live (BURROW/NORTHSTAR.md: "emit_c: unsupported
+// top-level form... DUNG's own real editor-domain build is blocked on this specific gap").
+// Ported directly from emit_go_test.go's own real, already-passing
+// TestEmitGoDefstructAndGetField -- same real source shape, same real assertions adapted for C.
+func TestEmitCDefstructAndGetField(t *testing.T) {
+	c, err := buildC(t, "(defstruct ServiceSpec\n  (name : String)\n  (port : I32))\n"+
+		"(defn service-port [(s : ServiceSpec)] : I32\n"+
+		"  (get-field s :port))")
+	if err != nil {
+		t.Fatalf("defstruct + get-field should emit successfully: %v", err)
+	}
+	if !strings.Contains(c, "typedef struct {") {
+		t.Errorf("defstruct should emit a real C typedef struct: got %s", c)
+	}
+	if !strings.Contains(c, "char * name;") || !strings.Contains(c, "int port;") {
+		t.Errorf("struct fields should be real C types, snake_cased: got %s", c)
+	}
+	if !strings.Contains(c, "} ServiceSpec;") {
+		t.Errorf("the typedef's own name should be the mangled struct name: got %s", c)
+	}
+	if !strings.Contains(c, "int service_port(ServiceSpec s)") {
+		t.Errorf("a struct-typed param should resolve to the real typedef name, passed by value: got %s", c)
+	}
+	if !strings.Contains(c, "(s).port") {
+		t.Errorf("get-field should lower to real C dot access: got %s", c)
+	}
+}
+
+// TestEmitCStructTypedefOrderedBeforeFunctions -- real, C-specific ordering constraint Go never
+// had to solve: a typedef must appear before any function declaration/definition that mentions
+// it, unlike decls-before-defs (which only matters for sibling calls, not types).
+func TestEmitCStructTypedefOrderedBeforeFunctions(t *testing.T) {
+	c, err := buildC(t, "(defstruct Rect (w : I32) (h : I32))\n"+
+		"(defn rect-width [(r : Rect)] : I32 (get-field r :w))")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	typedefIdx := strings.Index(c, "typedef struct")
+	fnIdx := strings.Index(c, "int rect_width(Rect r)")
+	if typedefIdx == -1 || fnIdx == -1 {
+		t.Fatalf("expected both a struct typedef and the function using it: got %s", c)
+	}
+	if typedefIdx > fnIdx {
+		t.Errorf("the struct typedef must be emitted before any function that uses the type, got:\n%s", c)
+	}
+}
+
+func TestEmitCUnknownStructTypeIsError(t *testing.T) {
+	_, err := buildC(t, "(defn f [(x : NotRegistered)] : I32 0)")
+	if err == nil {
+		t.Error("an unregistered struct type name should be a real, honest error, not silently accepted")
+	}
+}
+

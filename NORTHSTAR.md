@@ -300,9 +300,11 @@ GoblinFoxDragon candidacy is unaffected, just no longer the only one.
   layer (Phase 6, not committed to).
 - `DUNG` — its own real, separate repo (first scoped inside this repo as `DUNG.md`, moved by
   founder correction), "the BURROW editor" — its own real build depends on this repo's own emit
-  capability, now real for the narrow, scalar v0 scope (Phase 4). Its own ground-up PARENA editor
-  port needs to stay within that same real scope (no `defstruct`/`match`/`loop`/`Vec` yet) until
-  full `emit.c` parity lands — a real, concrete design constraint for DUNG's own next scoping
-  pass, not a full unblock yet.
+  capability. **Real, no longer a full blocker (2026-09-03)**: `defstruct`/`get-field` support
+  landed in the C target (see `CLAUDE.md`'s own real capability record), closing the exact gap
+  `DUNG/parena/rect_probe.prn` found live. DUNG's own ground-up PARENA editor port can now use
+  real structs for its buffer/pane/node state; `match`/`loop`/`Vec`/construction still don't
+  exist in either target, a real, narrower remaining constraint for DUNG's next scoping pass, not
+  the full `emit.c`-parity wait this note originally named.
 - `PAPERCRAFT/docs/NORTHSTAR_WEB_CLIENT.md` — the same-session precedent this doc's own "scoping
   pass before code" structure follows.

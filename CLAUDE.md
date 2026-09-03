@@ -58,6 +58,23 @@ hit a real file using it yet). `go test`: 52/52 (50 prior + 2 new). `burrow` is 
 `PATH`. Full `emit.c` parity (`defenum`/`match`/`loop`/`Result`/`Vec`, struct *construction*,
 `let`-bindings) and the TypeScript/Java targets remain unstarted.
 
+**`defstruct`/`get-field` support added to the C target too, closing DUNG's own real found-live
+gap** (2026-09-03, founder: "CONTINUE WORKING ON DUNG IDE" → investigated writing it in LO,
+found LO itself not ready yet → "ok write it in parena and go? right? with burrow" — the real
+next step was unblocking the exact gap `DUNG/parena/rect_probe.prn` found live on 2026-08-30:
+`emit_c: unsupported top-level form`). Ported directly from `emit_go.go`'s own real, already-
+shipped struct support (same real design: a registered `defstruct` emits a real C `typedef
+struct {...} Name;`, `get-field` lowers to plain `(record).field` dot access, passed by value,
+construction deliberately not emitted — same "receives, doesn't construct" split the Go target
+already established). One real, C-specific difference from the Go port: struct typedefs are
+collected into their own slice and emitted FIRST, before any function declaration/definition —
+a real ordering constraint C has that Go doesn't. 3 new tests (2 mirrored from
+`emit_go_test.go`'s own struct tests, adapted for C; a new ordering-specific test Go never
+needed). Verified live, not just unit tests: a real `.prn` file with a `Rect`-shaped struct
+compiled via `burrow build`, the emitted C compiled clean with `gcc -Wall -Wextra`, and run —
+correct result (`(1440-20)/2 = 710`) against a real test harness. `go build`/`go vet`/`go test`
+all clean (66/66 total).
+
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the
 BURROW editor," a unified terminal emulator + editor rewriting `PITVIPER` and PARENA's own

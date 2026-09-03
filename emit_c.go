@@ -44,7 +44,14 @@ func mangleC(name string) string {
 // (confirmed by reading src/emit.c directly: Unit->void, I32->int, Bool->int, F64->double,
 // String->char *) — any other type name is a real, honest "unsupported" error, matching this
 // file's own deliberate narrow v0 boundary.
-func resolveCType(typeName string) (string, error) {
+//
+// Takes `knownStructs` now — real, new capability (defstruct support, ported directly from
+// emit_go.go's own real, already-shipped `resolveGoType`, the exact same real design: a
+// registered defstruct name resolves to its own real, mangled C typedef name, passed by value —
+// the same real semantics parena-c's own C emitter already gives struct-typed parameters
+// (confirmed by reading its own emitted output directly: `Deployment d`, not a pointer), and the
+// same choice emit_go.go's own struct support already made for Go.
+func resolveCType(typeName string, knownStructs map[string]bool) (string, error) {
 	switch typeName {
 	case "Unit":
 		return "void", nil
@@ -55,7 +62,10 @@ func resolveCType(typeName string) (string, error) {
 	case "String":
 		return "char *", nil
 	default:
-		return "", errors.New("emit_c: unsupported parameter/return type (v0 only understands I32/F64/Bool/String/Unit)")
+		if knownStructs[typeName] {
+			return mangleC(typeName), nil
+		}
+		return "", errors.New("emit_c: unsupported parameter/return type (v0 only understands I32/F64/Bool/String/Unit, or a registered defstruct type)")
 	}
 }
 
@@ -162,6 +172,26 @@ func emitCExpr(expr *Node, scope *emitCScope) (string, error) {
 		return "(" + lhs + " " + cOp + " " + rhs + ")", nil
 	}
 
+	// get-field — real, new capability, the read half of defstruct support, ported directly from
+	// emit_go.go's own real, already-shipped handling (see emitCDefstruct's own doc comment for
+	// why construction isn't emitted here either): PARENA's real `(get-field record :field)`
+	// form lowers to C's own real, plain `record.field` dot access (record is passed by value,
+	// same as Go's target — see resolveCType's own doc comment). Real shape check matches the
+	// parser's own real AST for this form directly, same check emit_go.go's own version already
+	// uses: exactly 3 children, the record expression, then a `NodeKeyword` (`:field`, with its
+	// leading colon still part of `.Text` -- stripped here).
+	if head == "get-field" {
+		if len(expr.Children) != 3 || expr.Children[2].Type != NodeKeyword {
+			return "", errors.New("emit_c: get-field requires exactly (get-field record :field)")
+		}
+		recordE, err := emitCExpr(expr.Children[1], scope)
+		if err != nil {
+			return "", err
+		}
+		fieldName := strings.TrimPrefix(expr.Children[2].Text, ":")
+		return "(" + recordE + ")." + mangleC(fieldName), nil
+	}
+
 	// Otherwise: a real call to another top-level defn in the same generated file -- real,
 	// honest validation first (see this scope's own doc comment above for why).
 	if !scope.knownDefns[head] {
@@ -184,6 +214,40 @@ func emitCExpr(expr *Node, scope *emitCScope) (string, error) {
 	return b.String(), nil
 }
 
+// emitCDefstruct — real, new capability: a C `typedef struct { CType field1; ... } Name;` for
+// each real `(defstruct Name (field1 : T1) ...)` form. Ported directly from emit_go.go's own
+// real, already-shipped `emitGoDefstruct` — same real, deliberate scope decision, checked
+// against the exact same real trigger (PARENA's own `stdlib/k8s`/`stdlib/helm` packages, and now
+// DUNG's own real `Rect`/pane/node editor state): construction (`{:field val}`) and
+// pattern-style access are NOT emitted here -- every real function using a struct parameter only
+// ever RECEIVES it (via `get-field`), never constructs one internally; the real host that
+// constructs one (a C test harness, or DUNG's own Go host via cgo) does it with an ordinary C
+// struct literal against the real typedef this function emits.
+func emitCDefstruct(ds *Node, knownStructs map[string]bool) (string, error) {
+	if len(ds.Children) < 2 || ds.Children[1].Type != NodeSymbol {
+		return "", errors.New("emit_c: defstruct: malformed struct definition")
+	}
+	typeName := mangleC(ds.Children[1].Text)
+	var fields strings.Builder
+	for _, field := range ds.Children[2:] {
+		if field.Type != NodeList || len(field.Children) != 3 || field.Children[0].Type != NodeSymbol ||
+			field.Children[1].Type != NodeColon || field.Children[2].Type != NodeSymbol {
+			return "", errors.New("emit_c: defstruct: unsupported field shape (v0 only understands plain " +
+				"(name : I32|F64|Bool|String|StructType) fields -- no Arena/region annotations, no Vec fields)")
+		}
+		fType, err := resolveCType(field.Children[2].Text, knownStructs)
+		if err != nil {
+			return "", err
+		}
+		fields.WriteString("    ")
+		fields.WriteString(fType)
+		fields.WriteString(" ")
+		fields.WriteString(mangleC(field.Children[0].Text))
+		fields.WriteString(";\n")
+	}
+	return "typedef struct {\n" + fields.String() + "} " + typeName + ";\n\n", nil
+}
+
 // cFunc holds one real, emitted C function's own forward declaration and full definition,
 // assembled separately so EmitC can put every real forward declaration before every real
 // definition (matching emit.c's own real output shape, and needed for real correctness: a sibling
@@ -193,7 +257,7 @@ type cFunc struct {
 	def  string
 }
 
-func emitCDefn(defn *Node, knownDefns map[string]bool) (*cFunc, error) {
+func emitCDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]bool) (*cFunc, error) {
 	if len(defn.Children) < 3 || defn.Children[1].Type != NodeSymbol || defn.Children[2].Type != NodeVec {
 		return nil, errors.New("emit_c: defn: malformed function definition")
 	}
@@ -211,7 +275,7 @@ func emitCDefn(defn *Node, knownDefns map[string]bool) (*cFunc, error) {
 			return nil, errors.New("emit_c: defn: unsupported parameter shape (v0 only understands plain " +
 				"(name : I32|F64|Bool|String) params -- no Arena/region annotations)")
 		}
-		pType, err := resolveCType(param.Children[2].Text)
+		pType, err := resolveCType(param.Children[2].Text, knownStructs)
 		if err != nil {
 			return nil, err
 		}
@@ -231,7 +295,7 @@ func emitCDefn(defn *Node, knownDefns map[string]bool) (*cFunc, error) {
 	if len(defn.Children) != 6 || defn.Children[3].Type != NodeColon {
 		return nil, errors.New("emit_c: defn: expected (defn name [params] : RetType body) with exactly one body expression")
 	}
-	retType, err := resolveCType(defn.Children[4].Text)
+	retType, err := resolveCType(defn.Children[4].Text, knownStructs)
 	if err != nil {
 		return nil, err
 	}
@@ -258,14 +322,27 @@ func EmitC(program *Node) (string, error) {
 	// Real, first pass: collect every real top-level defn's own real (unmangled) name, so a
 	// forward reference to a sibling defined later in the file resolves correctly and an actual
 	// unknown identifier (see emitCScope's own doc comment) still gets a real, honest error
-	// instead of being silently passed through as broken C.
+	// instead of being silently passed through as broken C. Also collects every real top-level
+	// defstruct's own name now (real, new capability, ported from EmitGo's own identical first
+	// pass) -- struct types need to be known before any defn using one is validated, same real
+	// two-phase shape emit_go.go's own EmitGo already established.
 	knownDefns := map[string]bool{}
+	knownStructs := map[string]bool{}
 	for _, form := range program.Children {
 		if isCallNamed(form, "defn") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
 			knownDefns[form.Children[1].Text] = true
 		}
+		if isCallNamed(form, "defstruct") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
+			knownStructs[form.Children[1].Text] = true
+		}
 	}
 
+	// Real structs are collected into their own slice, separate from decls/defs, and emitted
+	// FIRST in the final output -- a real, necessary C ordering constraint decls/defs don't have
+	// on their own (a typedef must exist before ANY function declaration or definition that
+	// mentions it), unlike Go, which has no such ordering requirement at all (emit_go.go's own
+	// EmitGo just appends struct defs into the same single `defs` slice it uses for functions).
+	var structs []string
 	var decls []string
 	var defs []string
 
@@ -273,8 +350,16 @@ func EmitC(program *Node) (string, error) {
 		if isCallNamed(form, "module") || isCallNamed(form, "export") || isCallNamed(form, "import") {
 			continue
 		}
+		if isCallNamed(form, "defstruct") {
+			def, err := emitCDefstruct(form, knownStructs)
+			if err != nil {
+				return "", err
+			}
+			structs = append(structs, def)
+			continue
+		}
 		if isCallNamed(form, "defn") {
-			fn, err := emitCDefn(form, knownDefns)
+			fn, err := emitCDefn(form, knownDefns, knownStructs)
 			if err != nil {
 				return "", err
 			}
@@ -282,12 +367,15 @@ func EmitC(program *Node) (string, error) {
 			defs = append(defs, fn.def)
 			continue
 		}
-		return "", errors.New("emit_c: unsupported top-level form (v0 only understands defn, module, export, import)")
+		return "", errors.New("emit_c: unsupported top-level form (v0 only understands defn, defstruct, module, export, import)")
 	}
 
 	var out strings.Builder
 	out.WriteString("/* Generated by burrow build (C target) -- VS0-for-Go v0, do not edit by hand. */\n")
 	out.WriteString("#include \"parena_runtime.h\"\n\n")
+	for _, s := range structs {
+		out.WriteString(s)
+	}
 	for _, d := range decls {
 		out.WriteString(d)
 	}
