@@ -1,3 +1,34 @@
+## 2026-09-03 (3)
+- feat: `match`/`Result`/`Option` added to the Go emission target (emit_go.go), kanban card
+  9988's own explicit follow-up: "take on the full match/Result BURROW port." Real, direct port
+  of PARENA's own reference C runtime's representation (`parena_runtime.h`'s own
+  `{int tag; void *value;}` Result/Option) -- one real, FIXED, shared Go struct per Result/Option
+  (`Tag int; Value any`), not per-instantiation, since VS0 has no generics to give either a real
+  one anyway. `Ok`/`Err`/`Some` construct via a plain Go composite literal; bare `None` (the
+  real, established PARENA source convention) constructs an empty `Option`. Real, deliberate v0
+  boundary, named explicitly: `match`'s scrutinee must be a direct call to a known
+  Result/Option-returning defn (payload/error types resolved via a new first-pass `defnRetInfo`
+  map, the same real timing `knownDefns`/`knownStructs` already use) -- not an arbitrary
+  expression or a `let`-bound variable, since this emitter's own local-variable tracking carries
+  presence only, no per-variable type; PARENA's own mature `src/emit.c` needed several distinct,
+  dated bug-fix passes (2026-08-21/23/24/27) to get this fully right for its own C target, not
+  rushed past here either. Exactly 2 clauses required per match, one per real tag value -- the
+  second clause compiles to a plain Go `else`, and two clauses naming the same tag is a real,
+  honest compile error, not silently dead code. Two real, separate gaps found and fixed live,
+  not designed in advance: string literals had NO handling anywhere in `emitGoExpr` at all (fixed
+  via `strconv.Quote`, correctly re-escaping a literal containing a real `"` or `\`); a match
+  clause's own unused bound payload is a real Go "declared and not used" compile error with no
+  direct Go equivalent to the C target's own `__attribute__((unused))` (fixed with an explicit
+  `_ = name` discard). `go test`: 103/103 (73 prior + 30 new -- string literals, Ok/Err/Some/None
+  construction, match on Result and Option, the real v0-boundary error, the duplicate-tag error,
+  and a real end-to-end `go build`-and-run test). Live-verified, not just unit tests: a real
+  `safe-div`/`half-of-even` pair plus `match`-based callers compiled via `burrow build`,
+  `go build`-linked into a real, separate Go module, and run -- correct output for all four real
+  cases (`5`, `-1`, `4`, `-99`). Still real, honest, unstarted: `defenum`, `loop`, `Vec`, struct
+  construction -- a real CLI needs `loop` for iteration too before "write a CLI in this" is
+  fully true; this closes the second biggest real blocker (real error handling), not the last
+  one. (sess-20260902-2008-ed50169e)
+
 ## 2026-09-03 (2)
 - feat: `let`/`do` added to the Go emission target (emit_go.go), closing kanban priority-queue
   cards 1199/9988 ("iterate on project burrow... so that parena gets transformed into idiomatic

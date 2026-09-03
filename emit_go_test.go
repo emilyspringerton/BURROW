@@ -1,10 +1,15 @@
 // emit_go_test.go — real v0 verification for the new Go emitter (emit_go.go), same real split
 // emit_c_test.go already establishes: check the emitter's own success/failure behavior directly
-// here, verify actual `go build` acceptance of the emitted output separately (not as a go test),
-// by actually invoking `burrow build -o *.go` + `go build` on real .prn input and running it.
+// here. Real, new addition (kanban card 9988's own match/Result port):
+// TestEmitGoMatchEndToEndBuildsAndRuns below DOES do the real `go build` + run verification as
+// an actual `go test`, not manually alongside it -- real, valuable enough (match/Result's own
+// payload-type resolution is genuinely easy to get subtly wrong) to be a permanent, repeatable
+// regression check rather than a one-off manual probe.
 package main
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -320,5 +325,231 @@ func TestEmitGoLetTwoBindingsChained(t *testing.T) {
 	}
 	if !strings.Contains(g, "y + 1") {
 		t.Errorf("expected the second binding to reference the first: got %s", g)
+	}
+}
+
+// TestEmitGoStringLiteral -- real, pre-existing gap found live while building match/Result
+// support (kanban card 9988): string literals had no handling anywhere in this file, even
+// though String was already a supported param/return type.
+func TestEmitGoStringLiteral(t *testing.T) {
+	g, err := buildGo(t, `(defn greeting [] : String "hello")`)
+	if err != nil {
+		t.Fatalf("a plain string literal should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, `return "hello"`) {
+		t.Errorf("expected a real Go string literal: got %s", g)
+	}
+}
+
+// TestEmitGoStringLiteralWithQuoteAndBackslash -- real correctness check that strconv.Quote is
+// actually doing the re-escaping work, not a naive passthrough that would emit invalid Go for a
+// literal containing a real `"` or `\`.
+func TestEmitGoStringLiteralWithQuoteAndBackslash(t *testing.T) {
+	g, err := buildGo(t, `(defn tricky [] : String "a \"quoted\" \\ value")`)
+	if err != nil {
+		t.Fatalf("unexpected emit error: %v", err)
+	}
+	if !strings.Contains(g, `"a \"quoted\" \\ value"`) {
+		t.Errorf("expected a real, correctly re-escaped Go string literal: got %s", g)
+	}
+}
+
+// TestEmitGoResultConstruction -- real, new capability (kanban card 9988): Ok/Err construct the
+// real, fixed, shared Result struct (Tag/Value), matching PARENA's own reference C runtime's
+// {tag, value} representation.
+func TestEmitGoResultConstruction(t *testing.T) {
+	g, err := buildGo(t, "(defn safe-div [(a : I32) (b : I32)] : (Result I32 String)\n"+
+		`  (if (= b 0) (Err "division by zero") (Ok (/ a b))))`)
+	if err != nil {
+		t.Fatalf("a Result-returning defn should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "type Result struct") {
+		t.Errorf("expected the real, shared Result struct type declared: got %s", g)
+	}
+	if !strings.Contains(g, "func SafeDiv(a int32, b int32) Result") {
+		t.Errorf("expected Result as the real declared Go return type: got %s", g)
+	}
+	if !strings.Contains(g, `Result{Tag: 0, Value: "division by zero"}`) {
+		t.Errorf("expected a real Err construction: got %s", g)
+	}
+	if !strings.Contains(g, "Result{Tag: 1, Value: (a / b)}") {
+		t.Errorf("expected a real Ok construction: got %s", g)
+	}
+}
+
+// TestEmitGoOptionConstruction -- real, new capability: Some/bare None construct the real,
+// shared Option struct. Bare `None` (no parens) is the real, established PARENA source
+// convention (see PARENA/stdlib/bstree.prn's own real, live get-loop).
+func TestEmitGoOptionConstruction(t *testing.T) {
+	g, err := buildGo(t, "(defn half-of-even [(x : I32)] : (Option I32)\n"+
+		"  (if (= (mod x 2) 0) (Some (/ x 2)) None))")
+	if err != nil {
+		t.Fatalf("an Option-returning defn should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "type Option struct") {
+		t.Errorf("expected the real, shared Option struct type declared: got %s", g)
+	}
+	if !strings.Contains(g, "Option{Tag: 1, Value: (x / 2)}") {
+		t.Errorf("expected a real Some construction: got %s", g)
+	}
+	if !strings.Contains(g, "Option{Tag: 0, Value: nil}") {
+		t.Errorf("expected bare None to construct a real, empty Option: got %s", g)
+	}
+}
+
+// TestEmitGoMatchOnResult -- real, new capability: matching a direct call to a known
+// Result-returning defn, both Ok and Err clauses, real payload/error types resolved from that
+// defn's own declared return type (not left generically `any`).
+func TestEmitGoMatchOnResult(t *testing.T) {
+	g, err := buildGo(t, "(defn safe-div [(a : I32) (b : I32)] : (Result I32 String)\n"+
+		`  (if (= b 0) (Err "division by zero") (Ok (/ a b))))`+"\n"+
+		"(defn describe-div [(a : I32) (b : I32)] : I32\n"+
+		"  (match (safe-div a b)\n"+
+		"    ((Ok result) result)\n"+
+		"    ((Err msg) -1)))")
+	if err != nil {
+		t.Fatalf("match on a real Result-returning defn should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "SafeDiv(a, b)") {
+		t.Errorf("expected the real scrutinee call: got %s", g)
+	}
+	if !strings.Contains(g, ".Value.(int32)") {
+		t.Errorf("expected the Ok clause's bound value cast to the real, resolved payload type (int32), not left as 'any': got %s", g)
+	}
+	if !strings.Contains(g, ".Value.(string)") {
+		t.Errorf("expected the Err clause's bound value cast to the real, resolved error type (string): got %s", g)
+	}
+	// The Err clause's own bound "msg" is never used in its body -- must not trip Go's real
+	// "declared and not used" compile error (a real, found-live bug this test guards against).
+	if !strings.Contains(g, "_ = msg") {
+		t.Errorf("expected an explicit discard for the unused Err-clause binding: got %s", g)
+	}
+}
+
+// TestEmitGoMatchOnOption -- same real capability, Option/Some/None this time, including that
+// `None` (no payload) correctly takes no binding at all.
+func TestEmitGoMatchOnOption(t *testing.T) {
+	g, err := buildGo(t, "(defn half-of-even [(x : I32)] : (Option I32)\n"+
+		"  (if (= (mod x 2) 0) (Some (/ x 2)) None))\n"+
+		"(defn describe-half [(x : I32)] : I32\n"+
+		"  (match (half-of-even x)\n"+
+		"    ((Some result) result)\n"+
+		"    ((None) -99)))")
+	if err != nil {
+		t.Fatalf("match on a real Option-returning defn should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "HalfOfEven(x)") {
+		t.Errorf("expected the real scrutinee call: got %s", g)
+	}
+	if !strings.Contains(g, ".Value.(int32)") {
+		t.Errorf("expected the Some clause's bound value cast to the real, resolved payload type: got %s", g)
+	}
+}
+
+// TestEmitGoMatchUnknownScrutineeIsError -- real, deliberate v0 boundary enforced: matching
+// anything other than a direct call to a known Result/Option-returning defn is a real, honest
+// compile error, not silently wrong output.
+func TestEmitGoMatchUnknownScrutineeIsError(t *testing.T) {
+	_, err := buildGo(t, "(defn describe [(x : I32)] : I32\n"+
+		"  (match x\n"+
+		"    ((Ok result) result)\n"+
+		"    ((Err msg) -1)))")
+	if err == nil {
+		t.Fatal("expected a real error: v0 only supports matching a direct call to a known Result/Option-returning defn")
+	}
+}
+
+// TestEmitGoMatchDuplicateTagIsError -- real, deliberate exhaustiveness check: two clauses
+// naming the same real tag (e.g. two Ok clauses) is a real, honest error, not silently letting
+// the second one be dead code.
+func TestEmitGoMatchDuplicateTagIsError(t *testing.T) {
+	_, err := buildGo(t, "(defn safe-div [(a : I32) (b : I32)] : (Result I32 String)\n"+
+		`  (if (= b 0) (Err "division by zero") (Ok (/ a b))))`+"\n"+
+		"(defn describe-div [(a : I32) (b : I32)] : I32\n"+
+		"  (match (safe-div a b)\n"+
+		"    ((Ok result) result)\n"+
+		"    ((Ok result) result)))")
+	if err == nil {
+		t.Fatal("expected a real error: two clauses both matching tag 1 (Ok)")
+	}
+}
+
+// TestEmitGoMatchEndToEndBuildsAndRuns -- real, live, end-to-end proof matching this session's
+// own established discipline: emitted code isn't just accepted by this emitter, it's real,
+// valid, RUNNABLE Go with correct semantics for all four real branches (Ok/Err/Some/None).
+func TestEmitGoMatchEndToEndBuildsAndRuns(t *testing.T) {
+	src := "(module match-e2e)\n(export describe-div describe-half)\n" +
+		"(defn safe-div [(a : I32) (b : I32)] : (Result I32 String)\n" +
+		`  (if (= b 0) (Err "division by zero") (Ok (/ a b))))` + "\n" +
+		"(defn half-of-even [(x : I32)] : (Option I32)\n" +
+		"  (if (= (mod x 2) 0) (Some (/ x 2)) None))\n" +
+		"(defn describe-div [(a : I32) (b : I32)] : I32\n" +
+		"  (match (safe-div a b)\n" +
+		"    ((Ok result) result)\n" +
+		"    ((Err msg) -1)))\n" +
+		"(defn describe-half [(x : I32)] : I32\n" +
+		"  (match (half-of-even x)\n" +
+		"    ((Some result) result)\n" +
+		"    ((None) -99)))\n"
+
+	program, err := ParseProgram(src)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if err := RegionAnalyze(program); err != nil {
+		t.Fatalf("unexpected region-analyze error: %v", err)
+	}
+	g, err := EmitGo(program)
+	if err != nil {
+		t.Fatalf("unexpected emit error: %v", err)
+	}
+
+	dir := t.TempDir()
+	pkgDir := dir + "/burrowgen"
+	if err := os.Mkdir(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pkgDir+"/gen.go", []byte(g), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/go.mod", []byte("module matche2e\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainSrc := `package main
+
+import (
+	"fmt"
+
+	"matche2e/burrowgen"
+)
+
+func main() {
+	fmt.Println(burrowgen.DescribeDiv(10, 2))
+	fmt.Println(burrowgen.DescribeDiv(10, 0))
+	fmt.Println(burrowgen.DescribeHalf(8))
+	fmt.Println(burrowgen.DescribeHalf(7))
+}
+`
+	if err := os.WriteFile(dir+"/main.go", []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binPath := dir + "/bin"
+	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
+	buildCmd.Dir = dir
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("emitted Go failed to build (this is a real bug in emit_go.go, not the test): %v\n%s", err, out)
+	}
+
+	runCmd := exec.Command(binPath)
+	out, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the built binary failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	want := "5\n-1\n4\n-99\n"
+	if got != want {
+		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
 	}
 }

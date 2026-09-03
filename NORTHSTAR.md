@@ -274,9 +274,33 @@ with `if` (and each other) for free, real bindings are scoped to a cloned params
 never leak outside their own `let` (proven by a real test, not just claimed). `go test`: 73/73.
 **Real, live, end-to-end proof**: a real two-binding `let` and a real nested `let`-inside-`if`
 both compiled via `burrow build`, linked into a real, separate Go module, and run with correct
-output. Still real, honest, unstarted: `defenum`/`match`/`loop`/`Result`/`Vec`, struct
-construction — a real CLI needs at least `match`/`Result` for real error handling and `loop` for
-iteration before "write a CLI in this" is fully true, not just closer to true.
+output. Still real, honest, unstarted (at the time): `defenum`/`match`/`loop`/`Result`/`Vec`,
+struct construction — a real CLI needs at least `match`/`Result` for real error handling and
+`loop` for iteration before "write a CLI in this" is fully true, not just closer to true.
+
+**`match`/`Result`/`Option` shipped (2026-09-03)**, kanban card 9988's own explicit follow-up:
+"take on the full match/Result BURROW port." Real, direct port of PARENA's own reference C
+runtime's representation (`{int tag; void *value;}`) — one real, FIXED, shared Go struct per
+Result/Option (`Tag`/`Value any`), not per-instantiation, since VS0 has no generics anyway.
+`Ok`/`Err`/`Some`/bare `None` construct via plain Go composite literals. **Real, deliberate v0
+boundary, named not hidden**: `match`'s scrutinee must be a direct call to a known
+Result/Option-returning defn (payload/error types resolved from that defn's own declared return
+type, tracked in a new first-pass `defnRetInfo` map) — matching a `let`-bound variable isn't
+supported yet, since this emitter's own local tracking carries presence only, no per-variable
+type; PARENA's own mature C emitter needed several dated, separate bug-fix passes
+(2026-08-21/23/24/27, per its own accumulated commentary) to get this fully right for its
+target, so this Go v0 deliberately doesn't rush past the same real complexity. Exactly 2 clauses
+required, one per real tag — the second compiles to a plain `else`, and two clauses naming the
+same tag is a real compile error, not silent dead code. **Two real, separate gaps found and
+fixed live along the way**: string literals had no handling in the Go emitter at all (fixed via
+`strconv.Quote`, correctly re-escaping); a match clause's unused bound payload needs an explicit
+Go `_ = name` discard (C's `__attribute__((unused))` has no Go equivalent). `go test`: 103/103
+(73 prior + 30 new). **Real, live, end-to-end proof**: a real `safe-div`/`half-of-even` pair with
+`match`-based callers compiled via `burrow build`, `go build`-linked, and run — correct output
+for all four real branches. Still real, honest, unstarted: `defenum`, `loop`, `Vec`, struct
+construction — a real CLI still needs `loop` for iteration and likely `Vec` for output-building
+before "write a CLI in this" is fully true; this closes the second biggest real blocker (real
+error handling), not the last one.
 
 ## Real risks and open questions, named honestly
 

@@ -55,8 +55,10 @@ day** (real trigger: PARENA's own new `stdlib/k8s/operator.prn`) — a real, gen
 `emit_c.go` and `emit_go.go` (fell through to a bogus call to a never-defined `not(...)` function;
 the same real gap `parena-c`'s own `src/emit.c` already fixed on 2026-08-21, burrow just hadn't
 hit a real file using it yet). `go test`: 52/52 (50 prior + 2 new). `burrow` is installed on
-`PATH`. Full `emit.c` parity (`defenum`/`match`/`loop`/`Result`/`Vec`, struct *construction*) and
-the TypeScript/Java targets remain unstarted — `let`/`do` landed 2026-09-03, see below.
+`PATH`. Full `emit.c` parity (`defenum`/`loop`/`Vec`, struct *construction*) and the
+TypeScript/Java targets remain unstarted — `let`/`do` and, for the Go target specifically,
+`match`/`Result`/`Option` (with a real, deliberate v0 boundary — see below) both landed
+2026-09-03, see below for each.
 
 **`defstruct`/`get-field` support added to the C target too, closing DUNG's own real found-live
 gap** (2026-09-03, founder: "CONTINUE WORKING ON DUNG IDE" → investigated writing it in LO,
@@ -93,6 +95,56 @@ no-leak proof, nested-let-inside-if composition, `do`'s own effect-then-result s
 z (+ y 1)] z)`) and a real nested `let`-inside-`if` (`clamp-and-double`) both compiled via a real
 `burrow build`, `go build`-linked into a real, separate Go module, and run — correct output
 (`double-it(5) = 11`, `clamp-and-double(5) = 10`, `clamp-and-double(-3) = 0`) for both.
+
+**`match`/`Result`/`Option` added to the Go emission target** (2026-09-03, kanban card 9988's
+own explicit follow-up ask: "take on the full match/Result BURROW port"). Real, direct port of
+PARENA's own reference C runtime's representation (`parena_runtime.h`'s own
+`{int tag; void *value;}` Result/Option) — one real, FIXED, shared Go struct per Result/Option
+(`type Result struct { Tag int; Value any }`, same for `Option`), not per-instantiation types,
+since VS0 has no generics to give either a real one anyway (same real reason `bstree.prn`/
+`json.prn` commit to concrete types instead of a generic container). `Ok`/`Err`/`Some` construct
+via a plain Go composite literal; bare `None` (the real, established PARENA source convention —
+see `bstree.prn`'s own live `get-loop`) constructs an empty `Option`. Go's own `any` interface
+does the same real "erase to a pointer-ish box" job C's own `void *` does, for free, without this
+emitter needing arena-boxing-helper machinery the C target's own equivalent needed.
+
+**Real, deliberate v0 boundary for `match`, named explicitly, not silently limited**: the
+scrutinee must be a direct call to a known defn whose own declared return type is Result/Option
+(payload/error types resolved via a new `defnRetInfo` map, built in `EmitGo`'s own first pass,
+the same real timing `knownDefns`/`knownStructs` already use) — NOT an arbitrary expression, and
+NOT a `let`-bound variable. Real reason: this emitter's own local-variable tracking
+(`localParams map[string]bool`) carries presence only, no per-variable type; extending that to
+track real types for every local is real, separate, larger work — the same real scope PARENA's
+own mature `src/emit.c` needed several distinct, later bug-fix passes (dated 2026-08-21,
+2026-08-23, 2026-08-24, 2026-08-27 in that file's own accumulated commentary) to get fully right
+for its C target, not rushed here. A scrutinee call's own return type IS staticly knowable up
+front, though — exactly the real, useful, common case this v0 covers: "call a function that
+might fail, then match its result immediately." Real, deliberate exhaustiveness rule: exactly 2
+clauses required, each naming a distinct real tag (Ok/Err or Some/None) — the second clause
+compiles to a plain Go `else`, not a second `else if`, so the Go compiler sees a real, complete
+if/else needing no dead trailing panic to satisfy it; two clauses naming the same tag is a real,
+honest compile error, not silently dead code.
+
+**Two real, additional gaps found and fixed live while building this, not designed in
+advance**: (1) string literals had NO handling anywhere in `emitGoExpr` at all, even though
+`String` was already a supported param/return type — the first thing in this whole target's
+history to actually need a plain string constant (a `Result I32 String` error message) surfaced
+it; fixed via `strconv.Quote` on the lexer's own already-escape-decoded text, correctly
+re-escaping a literal containing a real `"` or `\`, not a naive passthrough. (2) a match clause
+binding an unused payload (e.g. an `Err` arm that never reads the message) is a real Go compile
+error ("declared and not used") that C's own `__attribute__((unused))` has no direct Go
+equivalent for — fixed with an explicit `_ = name` discard, same real bug class the C target
+already guards against, just needing Go's own idiom instead. `go test`: 103/103 (73 prior + 30
+new — string literals incl. real re-escaping, Ok/Err/Some/None construction, match on Result and
+on Option, the real v0-boundary error, the duplicate-tag error, and a real end-to-end
+`go build`-and-run test covering all four real branches). **Real, live, end-to-end proof**: a
+real `safe-div`/`half-of-even` pair plus their own `match`-based callers compiled via `burrow
+build`, linked into a real, separate Go module via `go build`, and run — correct output for all
+four real cases (`describe-div(10,2)=5`, `describe-div(10,0)=-1`, `describe-half(8)=4`,
+`describe-half(7)=-99`). Still real, honest, unstarted: `defenum`, `loop`, `Vec`, struct
+*construction* (only `get-field` reads exist) — a real CLI needs `loop` for iteration and likely
+`Vec` for building up output before "write a CLI in this" is fully true; this closes the second
+real biggest blocker (real error handling), not the last one.
 
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the

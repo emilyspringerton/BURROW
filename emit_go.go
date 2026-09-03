@@ -25,6 +25,7 @@ package main
 import (
 	"errors"
 	"go/format"
+	"strconv"
 	"strings"
 )
 
@@ -111,12 +112,72 @@ var goBinopTable = map[string]string{
 type emitGoScope struct {
 	knownDefns  map[string]bool
 	localParams map[string]bool
+	// defnRetInfo — real, new (kanban card 9988's own match/Result port): every known defn's own
+	// declared Result/Option return-type payload/error types, keyed by defn name, collected in
+	// EmitGo's own first pass. `match` uses this to know what concrete Go type a scrutinee call's
+	// own Ok/Some/Err payload actually is -- see resolveGoReturnType's own doc comment for the
+	// real reasoning and the real, honest v0 boundary this implies.
+	defnRetInfo map[string]goDefnRetInfo
 	// retType — the enclosing defn's own resolved Go return type. Only actually needed inside
 	// the "if" case below (see its own doc comment for the real, genuine bug this exists to
 	// fix), but threaded through the whole scope rather than passed as a separate parameter, the
 	// same way emitCScope carries context uniformly rather than growing a special-cased
 	// signature for one caller.
 	retType string
+}
+
+// goDefnRetInfo — a known defn's own Result/Option payload/error types, in real, already-resolved
+// Go type strings (e.g. "int32", "string", a registered struct's PascalCase name). ErrorType is
+// only meaningful when Kind == "result" (an Option has no error variant to carry one for).
+type goDefnRetInfo struct {
+	Kind        string // "result" or "option"
+	PayloadType string
+	ErrorType   string
+}
+
+// resolveGoReturnType — real, new capability alongside resolveGoType above: a defn's own
+// declared return type is either a bare scalar/struct symbol (resolveGoType's own existing real
+// scope) OR a compound `(Result Payload Error)` / `(Option Payload)` form, which resolveGoType
+// alone has never been able to parse (it only ever took a bare symbol's own text). Returns the
+// real Go type to declare (always the literal shared "Result"/"Option" struct name for those two
+// forms -- see emitResultOptionStructs' own doc comment for why these are fixed, not
+// per-instantiation, types) plus a *goDefnRetInfo when the return type IS Result/Option (nil
+// otherwise), so EmitGo's own first pass can register it for `match` to look up later.
+func resolveGoReturnType(typeNode *Node, knownStructs map[string]bool) (string, *goDefnRetInfo, error) {
+	if typeNode.Type == NodeSymbol {
+		t, err := resolveGoType(typeNode.Text, knownStructs)
+		return t, nil, err
+	}
+	if typeNode.Type != NodeList || len(typeNode.Children) == 0 || typeNode.Children[0].Type != NodeSymbol {
+		return "", nil, errors.New("emit_go: unsupported return type form (v0 only understands a bare I32/F64/Bool/String/struct symbol, or a compound (Result Payload Error)/(Option Payload) form)")
+	}
+	head := typeNode.Children[0].Text
+	switch head {
+	case "Result":
+		if len(typeNode.Children) != 3 || typeNode.Children[1].Type != NodeSymbol || typeNode.Children[2].Type != NodeSymbol {
+			return "", nil, errors.New("emit_go: Result return type requires exactly (Result PayloadType ErrorType), both bare symbols")
+		}
+		payload, err := resolveGoType(typeNode.Children[1].Text, knownStructs)
+		if err != nil {
+			return "", nil, err
+		}
+		errType, err := resolveGoType(typeNode.Children[2].Text, knownStructs)
+		if err != nil {
+			return "", nil, err
+		}
+		return "Result", &goDefnRetInfo{Kind: "result", PayloadType: payload, ErrorType: errType}, nil
+	case "Option":
+		if len(typeNode.Children) != 2 || typeNode.Children[1].Type != NodeSymbol {
+			return "", nil, errors.New("emit_go: Option return type requires exactly (Option PayloadType), a bare symbol")
+		}
+		payload, err := resolveGoType(typeNode.Children[1].Text, knownStructs)
+		if err != nil {
+			return "", nil, err
+		}
+		return "Option", &goDefnRetInfo{Kind: "option", PayloadType: payload}, nil
+	default:
+		return "", nil, errors.New("emit_go: unsupported compound return type '" + head + "' (v0 only understands Result/Option)")
+	}
 }
 
 func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
@@ -126,6 +187,17 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 	if expr.Type == NodeNumber {
 		return expr.Text, nil
 	}
+	// Real, pre-existing gap found live (kanban card 9988's own match/Result port -- a real
+	// `Result I32 String` error payload needing a plain "division by zero"-style literal was
+	// the first thing in this whole target's history to actually exercise one): string literals
+	// had no handling here at all, even though String was already a real, supported param/
+	// return type. The lexer's own real `.Text` is already fully escape-decoded (see lexer.go's
+	// own lexString doc comment) with no surrounding quotes -- strconv.Quote re-escapes it back
+	// into a real, safe, valid Go string literal (handles a literal containing a `"` or `\`
+	// correctly, not just the common case).
+	if expr.Type == NodeString {
+		return strconv.Quote(expr.Text), nil
+	}
 	if expr.Type == NodeSymbol {
 		// Real, genuine gap found live (PARENA/stdlib/datetime.prn's own is-leap-year?):
 		// bare `true`/`false` Bool literals have no handling at all here, so any real .prn
@@ -134,6 +206,12 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 		// ever actually named "true"/"false" in real PARENA source.
 		if expr.Text == "true" || expr.Text == "false" {
 			return expr.Text, nil
+		}
+		// Bare `None` -- real, established PARENA source convention (see bstree.prn's own real,
+		// live `get-loop`: `None` referenced unapplied, never `(None)`), matching how `true`/
+		// `false` are also real bare-symbol literals with no local/defn binding behind them.
+		if expr.Text == "None" {
+			return "Option{Tag: 0, Value: nil}", nil
 		}
 		if !scope.localParams[expr.Text] && !scope.knownDefns[expr.Text] {
 			return "", errors.New("emit_go: unknown identifier '" + expr.Text + "' at line " + itoa(expr.Line))
@@ -270,6 +348,57 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 		return wrapGoStmtsAsExpr(stmts, scope.retType), nil
 	}
 
+	// Ok/Err/Some/None construction -- real, new capability (kanban card 9988's own match/Result
+	// port). Real, direct port of PARENA's own runtime representation
+	// (parena_runtime.h's own result_ok/result_err/option_some/option_none): a real, FIXED,
+	// shared `{Tag int; Value any}` struct per Result/Option (see EmitGo's own doc comment on
+	// why this is fixed, not per-instantiation) -- Go's own `any` interface does the same real
+	// "erase to a pointer-ish box" job C's own `void *` does, for free, without this emitter
+	// needing its own arena-boxing-helper machinery the C target's own equivalent needed for a
+	// non-pointer payload.
+	if head == "Ok" || head == "Err" || head == "Some" {
+		if len(expr.Children) != 2 {
+			return "", errors.New("emit_go: " + head + " requires exactly 1 argument")
+		}
+		inner, err := emitGoExpr(expr.Children[1], scope)
+		if err != nil {
+			return "", err
+		}
+		switch head {
+		case "Ok":
+			return "Result{Tag: 1, Value: " + inner + "}", nil
+		case "Err":
+			return "Result{Tag: 0, Value: " + inner + "}", nil
+		default: // Some
+			return "Option{Tag: 1, Value: " + inner + "}", nil
+		}
+	}
+	if head == "None" {
+		if len(expr.Children) != 1 {
+			return "", errors.New("emit_go: None takes no arguments")
+		}
+		return "Option{Tag: 0, Value: nil}", nil
+	}
+
+	// match -- real, new capability (kanban card 9988), a real, deliberate v0 BOUNDARY named
+	// explicitly, not silently limited: the scrutinee must be a direct call to a known defn
+	// whose own declared return type is Result/Option (resolved via scope.defnRetInfo, built in
+	// EmitGo's own first pass) -- NOT an arbitrary expression, and NOT a `let`-bound variable.
+	// Real, honest reason: this emitter's own local-variable tracking (`localParams
+	// map[string]bool`) carries presence only, no per-variable TYPE -- extending that to track
+	// real types for every local is real, separate, larger work (the same real scope PARENA's
+	// own mature `src/emit.c` needed several distinct, later bug-fix passes to get right for its
+	// C target, per that file's own accumulated `scrut_payload_type`/`scrut_error_type`
+	// commentary — not something to rush past here). A scrutinee call's own return type IS
+	// staticly knowable up front, though, which is exactly the real, useful, common case this
+	// v0 covers: "call a function that might fail, then match its result immediately."
+	if head == "match" {
+		if len(expr.Children) < 2 {
+			return "", errors.New("emit_go: match requires a scrutinee expression")
+		}
+		return emitGoMatch(expr, scope)
+	}
+
 	// `(not x)` -- real, same unary-operator gap emit_c.go's own real fix just closed, same day,
 	// same real trigger (stdlib/k8s/operator.prn's own `(if (not exists) ...)`); Go's own `!`
 	// negation operator is the direct equivalent.
@@ -386,6 +515,143 @@ func wrapGoStmtsAsExpr(stmts []string, retType string) string {
 	return b.String()
 }
 
+// goMatchCounter -- real, direct analog of PARENA's own reference `src/emit.c`'s own
+// `static int match_counter`: a process-wide counter giving every real match expression its own
+// unique temp-variable name, so nested/sibling matches within the same defn (or across defns in
+// one compile) never collide. Single-threaded compile process, same real assumption every other
+// package-level emitter state in this file already makes.
+var goMatchCounter int
+
+// emitGoMatch -- see this function's own call site in emitGoExpr for the real, deliberate v0
+// boundary this implements (scrutinee must be a direct call to a known Result/Option-returning
+// defn) and why. Real, direct port of PARENA's own reference match codegen's overall SHAPE
+// (tag-dispatch via if/else-if, one clause body per real tag value) -- see this repo's own
+// BURROW/CLAUDE.md for the fuller real design writeup once shipped.
+func emitGoMatch(expr *Node, scope *emitGoScope) (string, error) {
+	scrutNode := expr.Children[1]
+	clauseNodes := expr.Children[2:]
+	if len(clauseNodes) != 2 {
+		return "", errors.New("emit_go: match requires exactly 2 clauses at line " + itoa(expr.Line) +
+			" (v0 only supports Result/Option, which have exactly 2 real variants each -- no wildcard/defenum matching yet)")
+	}
+	if scrutNode.Type != NodeList || len(scrutNode.Children) == 0 || scrutNode.Children[0].Type != NodeSymbol {
+		return "", errors.New("emit_go: match's scrutinee must be a direct call to a known defn returning Result/Option at line " +
+			itoa(scrutNode.Line) + " (v0 boundary: this emitter does not yet track per-variable types for a let-bound scrutinee)")
+	}
+	calleeName := scrutNode.Children[0].Text
+	info, ok := scope.defnRetInfo[calleeName]
+	if !ok {
+		return "", errors.New("emit_go: match: '" + calleeName + "' is not a known defn with a declared Result/Option return type at line " + itoa(scrutNode.Line))
+	}
+	scrutExpr, err := emitGoExpr(scrutNode, scope)
+	if err != nil {
+		return "", err
+	}
+
+	goMatchCounter++
+	tmpVar := "__match_tmp_" + itoa(goMatchCounter)
+
+	seenTags := map[int]bool{}
+	var branches strings.Builder
+	for i, clauseNode := range clauseNodes {
+		if clauseNode.Type != NodeList || len(clauseNode.Children) != 2 {
+			return "", errors.New("emit_go: match: each clause must be exactly (pattern body) at line " + itoa(clauseNode.Line))
+		}
+		pattern := clauseNode.Children[0]
+		bodyNode := clauseNode.Children[1]
+
+		var ctorName, bindName string
+		switch {
+		case pattern.Type == NodeList && len(pattern.Children) == 2 && pattern.Children[0].Type == NodeSymbol && pattern.Children[1].Type == NodeSymbol:
+			ctorName = pattern.Children[0].Text
+			bindName = pattern.Children[1].Text
+		case pattern.Type == NodeList && len(pattern.Children) == 1 && pattern.Children[0].Type == NodeSymbol:
+			ctorName = pattern.Children[0].Text
+		case pattern.Type == NodeSymbol:
+			ctorName = pattern.Text
+		default:
+			return "", errors.New("emit_go: match: unsupported pattern shape at line " + itoa(pattern.Line) +
+				" (v0 only understands (Ctor) or (Ctor bind-name))")
+		}
+
+		var tagValue int
+		var payloadType string
+		switch ctorName {
+		case "Ok":
+			if info.Kind != "result" {
+				return "", errors.New("emit_go: match: 'Ok' pattern used against a non-Result scrutinee at line " + itoa(pattern.Line))
+			}
+			tagValue, payloadType = 1, info.PayloadType
+		case "Err":
+			if info.Kind != "result" {
+				return "", errors.New("emit_go: match: 'Err' pattern used against a non-Result scrutinee at line " + itoa(pattern.Line))
+			}
+			tagValue, payloadType = 0, info.ErrorType
+		case "Some":
+			if info.Kind != "option" {
+				return "", errors.New("emit_go: match: 'Some' pattern used against a non-Option scrutinee at line " + itoa(pattern.Line))
+			}
+			tagValue, payloadType = 1, info.PayloadType
+		case "None":
+			if info.Kind != "option" {
+				return "", errors.New("emit_go: match: 'None' pattern used against a non-Option scrutinee at line " + itoa(pattern.Line))
+			}
+			if bindName != "" {
+				return "", errors.New("emit_go: match: 'None' carries no payload, it cannot bind a name at line " + itoa(pattern.Line))
+			}
+			tagValue = 0
+		default:
+			return "", errors.New("emit_go: match: unsupported pattern '" + ctorName + "' at line " + itoa(pattern.Line) + " (v0 only understands Ok/Err/Some/None)")
+		}
+		if seenTags[tagValue] {
+			return "", errors.New("emit_go: match: two clauses both match tag " + itoa(tagValue) + " at line " + itoa(pattern.Line) + " -- exactly one clause per real variant")
+		}
+		seenTags[tagValue] = true
+
+		// Real, cloned child scope (same real leak-prevention discipline `let`'s own emitGoExpr
+		// case already established): a clause's own bound name must not be visible to its
+		// sibling clause or anything outside this match.
+		childParams := make(map[string]bool, len(scope.localParams)+1)
+		for k, v := range scope.localParams {
+			childParams[k] = v
+		}
+		var bindStmt string
+		if bindName != "" {
+			childParams[bindName] = true
+			// Real, found-live Go compile error, same class as the `unused param`/`unused let
+			// binding` cases this repo's own C target guards with `__attribute__((unused))` --
+			// Go has no such attribute, so a clause that validly ignores its own bound payload
+			// (e.g. an Err arm that doesn't need the message) needs an explicit `_ = name`
+			// discard instead, or `go build` genuinely fails with "declared and not used".
+			goBindName := strings.ReplaceAll(bindName, "-", "_")
+			bindStmt = goBindName + " := " + tmpVar + ".Value.(" + payloadType + ")\n_ = " + goBindName + "\n"
+		}
+		childScope := &emitGoScope{knownDefns: scope.knownDefns, localParams: childParams, defnRetInfo: scope.defnRetInfo, retType: scope.retType}
+
+		bodyExpr, err := emitGoExpr(bodyNode, childScope)
+		if err != nil {
+			return "", err
+		}
+
+		// Real, deliberate exhaustiveness shortcut: with exactly 2 clauses required and each
+		// naming a DISTINCT real tag value (seenTags above already enforces this), the second
+		// clause is by construction the complementary case -- emitted as a plain `else`, not a
+		// second `else if <tag check>`, so Go's own compiler sees a real, complete if/else (every
+		// path returns) and doesn't need a dead trailing panic to satisfy it.
+		if i == 0 {
+			branches.WriteString("if " + tmpVar + ".Tag == " + itoa(tagValue) + " {\n")
+		} else {
+			branches.WriteString("} else {\n")
+		}
+		branches.WriteString(bindStmt)
+		branches.WriteString("return " + scope.retType + "(" + bodyExpr + ")\n")
+	}
+	branches.WriteString("}\n")
+
+	return "func() any { " + tmpVar + " := " + scrutExpr + "\n" + branches.String() +
+		" }().(" + scope.retType + ")", nil
+}
+
 // mangleGoLocal — a bare symbol reference inside a body is either a LOCAL param or let-binding
 // (Go convention: lowercase, unexported -- matches every real, idiomatic Go function's own
 // parameter naming) or a real, zero-arg sibling call (which
@@ -443,13 +709,13 @@ func emitGoDefstruct(ds *Node, knownStructs map[string]bool) (string, error) {
 	return "type " + typeName + " struct {\n" + fields.String() + "}", nil
 }
 
-func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]bool) (string, error) {
+func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]bool, defnRetInfo map[string]goDefnRetInfo) (string, error) {
 	if len(defn.Children) < 3 || defn.Children[1].Type != NodeSymbol || defn.Children[2].Type != NodeVec {
 		return "", errors.New("emit_go: defn: malformed function definition")
 	}
 	fnName := mangleGo(defn.Children[1].Text)
 	params := defn.Children[2]
-	scope := &emitGoScope{knownDefns: knownDefns, localParams: map[string]bool{}}
+	scope := &emitGoScope{knownDefns: knownDefns, localParams: map[string]bool{}, defnRetInfo: defnRetInfo}
 
 	var paramList strings.Builder
 	for i, param := range params.Children {
@@ -477,7 +743,7 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]
 	if len(defn.Children) != 6 || defn.Children[3].Type != NodeColon {
 		return "", errors.New("emit_go: defn: expected (defn name [params] : RetType body) with exactly one body expression")
 	}
-	retType, err := resolveGoType(defn.Children[4].Text, knownStructs)
+	retType, _, err := resolveGoReturnType(defn.Children[4], knownStructs)
 	if err != nil {
 		return "", err
 	}
@@ -519,6 +785,27 @@ func EmitGo(program *Node) (string, error) {
 		}
 	}
 
+	// Real, new second first-pass step (kanban card 9988's own match/Result port): a defn's own
+	// Result/Option return type needs to be known BEFORE emitting any defn body, the same real
+	// reason knownDefns/knownStructs above are collected up front -- `match` on a call to defn B
+	// needs B's own declared payload/error type even when B is defined later in the same file
+	// (Go itself doesn't care about declaration order, but this emitter's own resolution does).
+	// Uses knownStructs (already complete from the loop above) since a Result/Option's own
+	// payload can itself be a registered struct type.
+	defnRetInfo := map[string]goDefnRetInfo{}
+	for _, form := range program.Children {
+		if !isCallNamed(form, "defn") || len(form.Children) != 6 || form.Children[1].Type != NodeSymbol {
+			continue
+		}
+		_, info, err := resolveGoReturnType(form.Children[4], knownStructs)
+		if err != nil {
+			continue // a real error here is reported for real when the defn body itself is emitted below
+		}
+		if info != nil {
+			defnRetInfo[form.Children[1].Text] = *info
+		}
+	}
+
 	var defs []string
 	for _, form := range program.Children {
 		if isCallNamed(form, "module") || isCallNamed(form, "export") || isCallNamed(form, "import") {
@@ -533,7 +820,7 @@ func EmitGo(program *Node) (string, error) {
 			continue
 		}
 		if isCallNamed(form, "defn") {
-			def, err := emitGoDefn(form, knownDefns, knownStructs)
+			def, err := emitGoDefn(form, knownDefns, knownStructs, defnRetInfo)
 			if err != nil {
 				return "", err
 			}
@@ -546,6 +833,18 @@ func EmitGo(program *Node) (string, error) {
 	var out strings.Builder
 	out.WriteString("// Code generated by burrow build (Go target) -- VS0-for-Go v0, DO NOT EDIT.\n\n")
 	out.WriteString("package burrowgen\n\n")
+	// Result/Option -- real, FIXED, shared Go struct types (not per-instantiation), the exact
+	// same real "erase the payload type, tag + any-typed value" design PARENA's own reference C
+	// runtime already uses (parena_runtime.h's own Result/Option: `{int tag; void *value;}`) --
+	// ported directly, not reinvented, since VS0 has no generics to give Result/Option a real
+	// per-instantiation type anyway (the same reason bstree.prn/json.prn commit to concrete
+	// types instead of a generic container). Emitted only when this file's own defns actually
+	// declare a Result/Option return type -- harmless to check even though Go itself doesn't
+	// error on an unused type declaration, just keeps a file that never needs these clean.
+	if len(defnRetInfo) > 0 {
+		out.WriteString("type Result struct {\n\tTag   int // 1 = Ok, 0 = Err\n\tValue any\n}\n\n")
+		out.WriteString("type Option struct {\n\tTag   int // 1 = Some, 0 = None\n\tValue any\n}\n\n")
+	}
 	out.WriteString(strings.Join(defs, "\n\n"))
 	out.WriteString("\n")
 
