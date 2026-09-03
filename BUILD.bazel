@@ -1,0 +1,25 @@
+# BUILD.bazel — real, minimal exposure of the `burrow` binary as `@burrow//:burrow` (kanban
+# priority-queue card PX-333). Mirrors PARENA's own real `@parena//src:parena` target exactly —
+# the one thing a consuming repo's own `burrow new`-generated BUILD.bazel genrule needs to
+# actually resolve.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "burrow_lib",
+    srcs = glob(["*.go"], exclude = ["*_test.go"]),
+    importpath = "burrow",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "burrow",
+    embed = [":burrow_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "burrow_test",
+    srcs = glob(["*_test.go"]),
+    embed = [":burrow_lib"],
+)

@@ -1,0 +1,17 @@
+"""BURROW — a full, feature-for-feature parallel rewrite of the PARENA compiler in Go + PARENA
+itself. This MODULE.bazel is new (2026-09-03, kanban priority-queue card PX-333: "PARENA SCAFFOLD
+NEW NEEDS TO GENERATE BAZEL BY DEFAULT") — real, minimal, the one thing needed to make `burrow
+new`'s own generated BUILD.bazel files (see main.go's cmdNew) actually resolve `@burrow//:burrow`
+as a real Bazel target for a consuming repo's own genrule, mirroring PARENA's own real
+`@parena//src:parena` precedent exactly.
+"""
+
+module(
+    name = "burrow",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_go", version = "0.63.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.22.0")
