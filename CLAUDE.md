@@ -184,6 +184,68 @@ single-binding loop) compiled via the real `burrow` CLI and run the same way, al
 `defenum`, `Vec`, struct construction, and `loop`/`match` beyond their own current v0 boundaries —
 a real "write a CLI in this" bar still needs at least `Vec` for building up output.
 
+**`Vec` added to the Go emission target** (2026-09-03, cruise-queue card 9988's own next-named
+prerequisite after `loop`/`recur`). Real, direct port of PARENA's own runtime representation
+SHAPE (`parena_runtime.h`'s own `Vec { Arena *arena; void **items; size_t count; size_t
+capacity; }`, a boxed void*-array) to Go's own idiomatic equivalent: a bare `[]any` slice, no
+wrapper struct at all — Go's own `append()` already does the exact real dynamic-growth job C's
+own hand-rolled `vec_push_` does, and `any` already does the exact real "erase to a pointer-ish
+box" job `void *` does. **Real, honest consequence, named directly**: this target's own header
+comment previously claimed every v0-scope program is "already GC-irrelevant, no heap allocation
+possible" — that stops being literally true the moment a real program uses `Vec` (`append` and
+its backing array are real Go heap allocations); a host that adopted `debug.SetGCPercent(-1)` on
+the strength of the original claim needs to know it no longer holds for `Vec`-using code.
+
+Real, necessary prerequisite found live, not scoped in advance: every real `.prn` function that
+builds a `Vec` takes a `dest : Arena @ Region` param and/or returns `(Vec ElemType) @ Region` —
+v0 had NO parsing at all for either shape before this pass (a hard "no Arena/region annotations"
+rejection). Both are now real, accepted: an `Arena @ Region` param is kept as a real, present Go
+param typed `any` (unused for real work, but resolvable as a local so `(vec/new dest)` doesn't
+error, and so a real Go host knows to pass a literal `nil` for it); a return type's own trailing
+`@ Region` suffix is parsed and skipped, correctly shifting the body's own real AST index.
+
+**Real, deliberate v0 boundary for `vec/get`, named explicitly**: this target has no per-Vec
+element-type tracking (the same class of gap `match`'s own scrutinee restriction and `loop`'s own
+binding-type fix already named), so `vec/get`'s result is always coerced to `int32` — right for
+every current real `.prn` Vec usage this target actually needs (`array.prn`'s own shape/stride
+vectors), but a real, named, NOT-yet-supported gap for a `(Vec SomeStruct)` (`bstree.prn`'s own
+real `BSTNode`-valued Vec is the known, existing counter-example) — extending this needs a real
+per-Vec-defn element-type registry, the same size of undertaking `defnRetInfo` is for
+Result/Option. Out-of-bounds returns a real, honest `int32(0)` (this target's closest equivalent
+to the C runtime's real NULL-on-OOB), via a comma-ok assertion, never a Go index-out-of-range
+panic. `deref` is a real, honest no-op here (documented, not silently dropped): Go's own
+`any`-boxed slice element already IS the value, with no separate reference layer C's own pointer
+representation needs unwrapped.
+
+**Three real, genuine bugs found and fixed live, not designed in advance**: (1) `append(vec, 1)`
+boxes a bare literal as plain Go `int`, not `int32` — the SAME defaulting class already fixed
+twice this same day (the `if` case's branches, `loop`'s own bindings), hitting a third real site;
+fixed by explicitly wrapping every pushed item in `int32(...)`. (2) The real, common `.prn` idiom
+`array.prn`'s own `zeros` uses — a side-effecting `loop` discarded via `_ =`, followed by the
+REAL result (`(let [...] (loop [i 0] (when ...)) {...})`) — broke every nested `if`/`loop`'s own
+internal `RetType(...)` boxing, which had always unconditionally used the ENCLOSING DEFN's own
+return type even for an expression whose value is thrown away a statement later; a discarded
+loop's own placeholder terminal value (e.g. bare `0`) then had to satisfy an unrelated return type
+like `[]any`, a genuine Go compile error (`cannot convert 0 to type []any`). Fixed by giving every
+non-final `do`/`let` statement its own scope with `retType` overridden to `any` — converting
+anything to `any` is always legal Go, and asserting `any` back to `any` always trivially succeeds,
+so a discarded expression's own internal boxing never needs to agree with whatever it's inside.
+(3) `recur` appearing inside a `(do effect... (recur ...))` — the exact real shape a Vec-building
+loop needs (`(do (vec/push! ...) (recur ...))`) — wasn't recognized as a recur branch at all
+(only a BARE `(recur ...)` was); extended `loop`'s own recur-detection to also unwrap a `do`
+whose own last expression is a direct recur call, running the `do`'s other expressions as real
+effect statements before the recur reassignment.
+
+`go test`: 93/93 total (5 new — an Arena param + region-annotated return type, real push!/len,
+the fused `&v` reference-token shape, the invalid-mutation-target error, and a real end-to-end
+`go build`-and-run test). **Real, live, end-to-end proof, not just unit tests**: a real program
+building a `(Vec I32)` via a `loop`+`vec/push!` (the exact real `zeros`-style shape above), then
+reading it back via `vec/len`+`vec/get`+`deref` in a second `loop`, compiled via `burrow build`,
+linked into a real, separate Go module via `go build`, and run — correct output for `sum-of(5)=10`,
+`sum-of(0)=0`, `sum-of(10)=45` (hand-computed triangular-number-style sums). Still real, honest,
+unstarted: `defenum`, struct construction, `(Vec SomeStruct)` element types, and `loop`/`match`
+beyond their own current v0 boundaries.
+
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the
 BURROW editor," a unified terminal emulator + editor rewriting `PITVIPER` and PARENA's own

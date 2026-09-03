@@ -178,8 +178,21 @@ func resolveGoReturnType(typeNode *Node, knownStructs map[string]bool) (string, 
 			return "", nil, err
 		}
 		return "Option", &goDefnRetInfo{Kind: "option", PayloadType: payload}, nil
+	case "Vec":
+		// Vec return type -- real, new capability (kanban card 9988's own next-named
+		// prerequisite after loop/recur). No goDefnRetInfo entry: match's own scrutinee lookup
+		// only ever cares about Result/Option, and a Vec-returning defn doesn't need a boxing
+		// helper the way Ok/Err/Some do -- a bare Go `[]any` composite literal already IS the
+		// right shape.
+		if len(typeNode.Children) != 2 || typeNode.Children[1].Type != NodeSymbol {
+			return "", nil, errors.New("emit_go: Vec return type requires exactly (Vec ElemType), a bare symbol")
+		}
+		if _, err := resolveGoType(typeNode.Children[1].Text, knownStructs); err != nil {
+			return "", nil, err
+		}
+		return "[]any", nil, nil
 	default:
-		return "", nil, errors.New("emit_go: unsupported compound return type '" + head + "' (v0 only understands Result/Option)")
+		return "", nil, errors.New("emit_go: unsupported compound return type '" + head + "' (v0 only understands Result/Option/Vec)")
 	}
 }
 
@@ -421,6 +434,151 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 		return emitGoLoop(expr, scope)
 	}
 
+	// vec/new/vec/push!/vec/get/vec/len/deref -- real, new capability (kanban cruise-queue card
+	// 9988's own next-named prerequisite after loop/recur: "a real CLI needs... likely Vec for
+	// building up output"). Real, direct port of PARENA's own runtime representation SHAPE
+	// (parena_runtime.h's own `Vec { Arena *arena; void **items; size_t count; size_t
+	// capacity; }`, a boxed void*-array) to Go's own idiomatic equivalent: a bare `[]any` slice,
+	// no wrapper struct at all -- Go's own `append()` already does the exact real dynamic-growth
+	// job C's own hand-rolled `vec_push_` does, and `any` already does the exact real "erase to a
+	// pointer-ish box" job `void *` does, so this needs none of the C target's own manual arena-
+	// growth bookkeeping. A real, honest consequence, named directly, not hidden: `emit_go.go`'s
+	// own header comment previously claimed every v0-scope program is "already GC-irrelevant, no
+	// heap allocation possible in the emitted code itself" -- that stops being literally true the
+	// moment a real program uses Vec (`append` and a `[]any` backing array are real Go heap
+	// allocations); a real host that adopted `debug.SetGCPercent(-1)` on the strength of that
+	// original claim needs to know it no longer holds for any Vec-using generated code.
+	if head == "vec/new" {
+		if len(expr.Children) != 2 {
+			return "", errors.New("emit_go: vec/new requires exactly 1 argument (the Arena)")
+		}
+		// The Arena argument is evaluated purely for real, honest validation (a typo'd/unknown
+		// identifier here should still be a real compile error) -- its own value is never used,
+		// since Go's `[]any` needs no arena at all. See the Arena-param doc comment in
+		// emitGoDefn's own param-parsing loop for the fuller real reasoning.
+		if _, err := emitGoExpr(expr.Children[1], scope); err != nil {
+			return "", err
+		}
+		return "[]any(nil)", nil
+	}
+	if head == "vec/push!" {
+		if len(expr.Children) < 3 {
+			return "", errors.New("emit_go: vec/push! requires exactly (vec/push! &mut-vec item)")
+		}
+		target, consumed, err := resolveVecRef(expr.Children[1:])
+		if err != nil {
+			return "", err
+		}
+		if len(expr.Children) != 1+consumed+1 {
+			return "", errors.New("emit_go: vec/push! requires exactly (vec/push! &mut-vec item)")
+		}
+		// Real, deliberate v0 boundary: the mutation target must be a plain local symbol or a
+		// `(get-field record :field)` expression -- both map to a real, valid, ADDRESSABLE Go
+		// l-value (`name` or `name.Field`) that `= append(...)` can assign back into. An
+		// arbitrary expression (e.g. a nested function call's own return value) has no real Go
+		// l-value to reassign at all, the same class of "not every expression can be a mutation
+		// target" restriction `let`'s own binding-name-must-be-a-symbol check already makes.
+		var lvalue string
+		if target.Type == NodeSymbol {
+			if !scope.localParams[target.Text] {
+				return "", errors.New("emit_go: unknown identifier '" + target.Text + "' at line " + itoa(target.Line))
+			}
+			lvalue = mangleGoLocal(target.Text, scope)
+		} else if target.Type == NodeList && len(target.Children) == 3 && target.Children[0].Type == NodeSymbol && target.Children[0].Text == "get-field" {
+			lvalue, err = emitGoExpr(target, scope)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			return "", errors.New("emit_go: vec/push!'s own mutation target must be a plain local variable or a (get-field record :field) expression")
+		}
+		itemE, err := emitGoExpr(expr.Children[1+consumed], scope)
+		if err != nil {
+			return "", err
+		}
+		// Real, genuine bug found and fixed live testing this: `append(vec, 1)` boxes the bare
+		// literal `1` as plain Go `int`, not `int32` -- the identical defaulting class already
+		// found and fixed for loop bindings and the "if" case's own branch values, hitting a
+		// THIRD real site here. Since vec/get's own read path always asserts `.(int32)` (see its
+		// own doc comment on this target's real "Vec is I32-valued" v0 boundary), a mis-boxed
+		// plain `int` element would silently fail that assertion and read back as 0 instead of
+		// the real pushed value. Fixed by wrapping every pushed item in an explicit `int32(...)`
+		// conversion -- a real no-op for a value that's already int32, load-bearing for a bare
+		// literal that isn't.
+		itemE = "int32(" + itemE + ")"
+		// Go closures capture their enclosing scope's own variables BY REFERENCE, not by value
+		// (a real, standard Go language guarantee, not an emitter trick) -- so this real,
+		// immediately-invoked func literal's own `lvalue = append(...)` genuinely mutates the
+		// CALLER's own variable, matching PARENA's own real "push! mutates its Vec argument in
+		// place" semantics with zero pointer/reference machinery needed on this target's side.
+		return "func() any { " + lvalue + " = append(" + lvalue + ", " + itemE + "); return nil }()", nil
+	}
+	if head == "vec/get" {
+		if len(expr.Children) < 3 {
+			return "", errors.New("emit_go: vec/get requires exactly (vec/get &vec idx)")
+		}
+		target, consumed, err := resolveVecRef(expr.Children[1:])
+		if err != nil {
+			return "", err
+		}
+		if len(expr.Children) != 1+consumed+1 {
+			return "", errors.New("emit_go: vec/get requires exactly (vec/get &vec idx)")
+		}
+		vecE, err := emitGoExpr(target, scope)
+		if err != nil {
+			return "", err
+		}
+		idxE, err := emitGoExpr(expr.Children[1+consumed], scope)
+		if err != nil {
+			return "", err
+		}
+		// Real, deliberate v0 boundary, named explicitly, not silently narrow: this target has
+		// no real per-Vec element-type tracking (the same class of "no per-variable type" gap
+		// match's own scrutinee restriction and loop's own binding-type fix already named) -- so
+		// vec/get's OWN result is always coerced to `int32` here, matching every current real
+		// .prn Vec usage this specific target actually needs (array.prn's own shape/stride
+		// vectors are all I32-valued). A `(Vec SomeStruct)` (bstree.prn's own real BSTNode-valued
+		// Vec is the known, existing counter-example) is real, separate, unsupported work for
+		// this target -- extending this would need a real per-Vec-defn element-type registry,
+		// the same size of undertaking `defnRetInfo` already is for Result/Option.
+		// Real, direct port of parena_runtime.h's own real vec_get safety guarantee: an
+		// out-of-bounds index returns a real, honest `int32(0)` (this target's own closest
+		// idiomatic equivalent to the C target's real NULL-on-OOB) rather than a Go runtime
+		// index-out-of-range panic; a comma-ok type assertion (not a direct `.(int32)`) also
+		// guards against a stored element that isn't actually an int32, for the same real reason.
+		return "func() any { __vec_tmp := " + vecE + "; __vec_idx := " + idxE +
+			"; if __vec_idx < 0 || __vec_idx >= int32(len(__vec_tmp)) { return int32(0) }" +
+			"; __vec_val, _ := __vec_tmp[__vec_idx].(int32); return __vec_val }().(int32)", nil
+	}
+	if head == "vec/len" {
+		if len(expr.Children) < 2 {
+			return "", errors.New("emit_go: vec/len requires exactly (vec/len &vec)")
+		}
+		target, consumed, err := resolveVecRef(expr.Children[1:])
+		if err != nil {
+			return "", err
+		}
+		if consumed != len(expr.Children)-1 {
+			return "", errors.New("emit_go: vec/len takes no arguments beyond the vec reference")
+		}
+		vecE, err := emitGoExpr(target, scope)
+		if err != nil {
+			return "", err
+		}
+		return "int32(len(" + vecE + "))", nil
+	}
+	// deref -- real, honest NO-OP on this target: PARENA/C represents a `vec/get` result as a
+	// real boxed pointer that `deref` reads through; Go's own `any`-boxed slice element (see
+	// vec/get above) already IS the real value with no separate reference layer to unwrap, so
+	// `deref` here is just "emit the inner expression unchanged." Named explicitly, not silently
+	// dropped, so a future reader isn't left wondering where deref's own real work went.
+	if head == "deref" {
+		if len(expr.Children) != 2 {
+			return "", errors.New("emit_go: deref requires exactly 1 argument")
+		}
+		return emitGoExpr(expr.Children[1], scope)
+	}
+
 	// `(not x)` -- real, same unary-operator gap emit_c.go's own real fix just closed, same day,
 	// same real trigger (stdlib/k8s/operator.prn's own `(if (not exists) ...)`); Go's own `!`
 	// negation operator is the direct equivalent.
@@ -501,9 +659,24 @@ func emitGoBody(bodyExprs []*Node, scope *emitGoScope) ([]string, error) {
 	if len(bodyExprs) == 0 {
 		return nil, errors.New("emit_go: let/do requires at least one body expression")
 	}
+	// discardScope -- real, genuine bug found and fixed live testing a real (loop [i 0] (if (>= i
+	// n) 0 (do (vec/push! ...) (recur ...)))) probe used as a NON-FINAL do/let statement (the
+	// exact real shape array.prn's own `zeros` uses: a side-effecting loop discarded via `_ =`,
+	// followed by the actual real result): every nested if/let/loop/match's own internal
+	// `RetType(...)`/`.(RetType)` boxing had always used `scope.retType` unconditionally --
+	// correct for a TAIL expression (whatever it produces really does become the enclosing
+	// function's own return value), but WRONG for a discarded non-final statement, whose own
+	// "terminal value" (here, a bare placeholder `0`) has no real reason to match the enclosing
+	// DEFN's actual return type (`(Vec I32)` in the real trigger case) at all -- `[]any(0)` is a
+	// real Go compile error ("cannot convert 0 to type []any"). Fixed by giving every non-final
+	// statement its own scope with `retType` overridden to `any` -- converting ANY value to `any`
+	// is always legal Go, and asserting `any` back to `any` always trivially succeeds, so a
+	// discarded expression's own internal boxing never needs to agree with what it's inside.
+	discardScope := *scope
+	discardScope.retType = "any"
 	var stmts []string
 	for i := 0; i < len(bodyExprs)-1; i++ {
-		e, err := emitGoExpr(bodyExprs[i], scope)
+		e, err := emitGoExpr(bodyExprs[i], &discardScope)
 		if err != nil {
 			return nil, err
 		}
@@ -687,6 +860,52 @@ func isRecurCall(node *Node) bool {
 		node.Children[0].Type == NodeSymbol && node.Children[0].Text == "recur"
 }
 
+// unwrapRecurBranch -- real, new capability alongside isRecurCall: recognizes EITHER a direct
+// `(recur ...)` OR a `(do effect1 ... (recur ...))` whose own LAST expression is a direct recur
+// call (the exact real shape a Vec-building loop needs -- see emitGoLoop's own doc comment on
+// recurEffects for the real trigger). Returns the effect expressions to run before the recur
+// reassignment (nil for the direct-recur case), the recur node itself, and whether this branch
+// is a recur branch at all. A `do` whose own last expression ISN'T a direct recur (or any other
+// shape) reports isRecur = false, same as isRecurCall already would.
+func unwrapRecurBranch(node *Node) ([]*Node, *Node, bool) {
+	if isRecurCall(node) {
+		return nil, node, true
+	}
+	if node.Type == NodeList && len(node.Children) >= 2 && node.Children[0].Type == NodeSymbol && node.Children[0].Text == "do" {
+		last := node.Children[len(node.Children)-1]
+		if isRecurCall(last) {
+			return node.Children[1 : len(node.Children)-1], last, true
+		}
+	}
+	return nil, nil, false
+}
+
+// resolveVecRef -- real, shared helper for vec/push!/vec/get/vec/len's own real "&expr"/
+// "&mut expr" reference argument. Confirmed live via `burrow parse`: PARENA's lexer fuses
+// "&name" into ONE token when there's no space ("&v" parses as a single symbol "&v"), but
+// "&mut expr" always parses as TWO separate tokens ("&mut" then expr) -- "&mut" has no attached
+// identifier of its own, and a following compound expression (e.g. a get-field call) can't fuse
+// into one token anyway. Returns the real target node (synthesizing a plain symbol node for the
+// fused "&name" case, stripping its leading "&") and how many of `children` it consumed (1 for
+// the fused case, 2 for the separate "&mut expr" case) so the caller knows where its own next
+// real argument starts.
+func resolveVecRef(children []*Node) (*Node, int, error) {
+	if len(children) == 0 {
+		return nil, 0, errors.New("emit_go: expected a &expr/&mut expr reference argument")
+	}
+	first := children[0]
+	if first.Type == NodeSymbol && first.Text == "&mut" {
+		if len(children) < 2 {
+			return nil, 0, errors.New("emit_go: &mut requires a following expression")
+		}
+		return children[1], 2, nil
+	}
+	if first.Type == NodeSymbol && strings.HasPrefix(first.Text, "&") && len(first.Text) > 1 {
+		return &Node{Type: NodeSymbol, Text: strings.TrimPrefix(first.Text, "&"), Line: first.Line}, 1, nil
+	}
+	return nil, 0, errors.New("emit_go: expected a &expr/&mut expr reference argument")
+}
+
 // emitGoLoop -- see emitGoExpr's own "loop" case for the real, deliberate v0 boundary this
 // implements (body must be exactly one top-level `(if cond then else)`, `recur` in exactly one
 // branch) and why. Real, direct port of PARENA's own reference C emitter's overall SHAPE for this
@@ -761,16 +980,33 @@ func emitGoLoop(expr *Node, scope *emitGoScope) (string, error) {
 		return "", err
 	}
 	thenNode, elseNode := body.Children[2], body.Children[3]
-	thenIsRecur, elseIsRecur := isRecurCall(thenNode), isRecurCall(elseNode)
+	thenEffects, thenRecur, thenIsRecur := unwrapRecurBranch(thenNode)
+	elseEffects, elseRecur, elseIsRecur := unwrapRecurBranch(elseNode)
 	if thenIsRecur == elseIsRecur {
 		return "", errors.New("emit_go: loop v0 requires recur in exactly one branch of the if (the other branch is the loop's own terminal value)")
 	}
-	recurNode, terminalNode := thenNode, elseNode
+	recurNode, terminalNode, recurEffects := thenRecur, elseNode, thenEffects
 	if elseIsRecur {
-		recurNode, terminalNode = elseNode, thenNode
+		recurNode, terminalNode, recurEffects = elseRecur, thenNode, elseEffects
 	}
 	if len(recurNode.Children)-1 != len(names) {
 		return "", errors.New("emit_go: recur requires exactly as many arguments as loop bindings (" + itoa(len(names)) + ")")
+	}
+	// recurEffects -- real, new capability alongside the direct-recur v0 boundary: the recur
+	// branch may be a `(do effect1 effect2 ... (recur ...))` form, not just a bare `(recur ...)`
+	// -- the exact real shape a Vec-building loop needs (`(do (vec/push! &mut v i) (recur (+ i
+	// 1)))`, confirmed live against a real probe). Each effect expression runs for its own side
+	// effect only (its value discarded), same convention emitGoBody's own non-final expressions
+	// already use, emitted BEFORE the recur-argument temp-variable computation below (an effect
+	// like `vec/push!` legitimately needs to run against the OLD binding values, same as every
+	// recur argument itself does).
+	var recurEffectStmts []string
+	for _, eff := range recurEffects {
+		effE, err := emitGoExpr(eff, childScope)
+		if err != nil {
+			return "", err
+		}
+		recurEffectStmts = append(recurEffectStmts, "_ = "+effE)
 	}
 
 	terminalE, err := emitGoExpr(terminalNode, childScope)
@@ -806,6 +1042,9 @@ func emitGoLoop(expr *Node, scope *emitGoScope) (string, error) {
 	b.WriteString("for {\n")
 	b.WriteString("if " + condE + " {\n")
 	if thenIsRecur {
+		for _, s := range recurEffectStmts {
+			b.WriteString(s + "\n")
+		}
 		for _, s := range recurTmp {
 			b.WriteString(s + "\n")
 		}
@@ -815,6 +1054,9 @@ func emitGoLoop(expr *Node, scope *emitGoScope) (string, error) {
 		b.WriteString("continue\n} else {\nreturn " + scope.retType + "(" + terminalE + ")\n}\n")
 	} else {
 		b.WriteString("return " + scope.retType + "(" + terminalE + ")\n} else {\n")
+		for _, s := range recurEffectStmts {
+			b.WriteString(s + "\n")
+		}
 		for _, s := range recurTmp {
 			b.WriteString(s + "\n")
 		}
@@ -894,12 +1136,52 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]
 
 	var paramList strings.Builder
 	for i, param := range params.Children {
-		if param.Type != NodeList || len(param.Children) != 3 || param.Children[0].Type != NodeSymbol ||
-			param.Children[1].Type != NodeColon || param.Children[2].Type != NodeSymbol {
+		if param.Type != NodeList || param.Children[0].Type != NodeSymbol || param.Children[1].Type != NodeColon {
 			return "", errors.New("emit_go: defn: unsupported parameter shape (v0 only understands plain " +
-				"(name : I32|F64|Bool|String|StructType) params -- no Arena/region annotations)")
+				"(name : I32|F64|Bool|String|StructType|(Vec ElemType)) params, or (name : Arena @ Region))")
 		}
-		pType, err := resolveGoType(param.Children[2].Text, knownStructs)
+		var pType string
+		var err error
+		// Arena @ Region params (real, new capability -- kanban card 9988's own next-named
+		// prerequisite for Vec support, found necessary live: every real .prn function that
+		// builds a Vec takes a "dest : Arena @ Region" param, and v0 had no parsing for this
+		// shape at all before now). Real, deliberate design: an Arena carries no real meaning
+		// for Go's own GC-backed slices (vec/new below needs no arena at all), so this is kept
+		// as a real, present Go parameter -- typed `any`, always unused for actual work -- purely
+		// so a bare reference to it elsewhere in the body (e.g. `(vec/new dest)`) still resolves
+		// as a known local rather than "unknown identifier", and so a real Go host calling into
+		// this function can pass a literal `nil` for it (the honest v0 convention this implies,
+		// same class of "host must know a real, narrow calling convention" already true for
+		// match's own scrutinee restriction).
+		if len(param.Children) == 5 && param.Children[2].Type == NodeSymbol && param.Children[2].Text == "Arena" &&
+			param.Children[3].Type == NodeAt && param.Children[4].Type == NodeSymbol {
+			pType = "any"
+		} else if len(param.Children) == 3 && param.Children[2].Type == NodeSymbol {
+			pType, err = resolveGoType(param.Children[2].Text, knownStructs)
+		} else if len(param.Children) == 3 && param.Children[2].Type == NodeList {
+			// (name : (Vec ElemType)) -- real, new capability alongside Arena params above.
+			// Represented as a plain Go `[]any` (see the "vec/new"/"vec/push!" cases in
+			// emitGoExpr for the full real design) -- no per-element-type Go type is ever
+			// needed, since every element is already boxed through `any` the same way a
+			// Result/Option's own payload already is.
+			vecType := param.Children[2]
+			if len(vecType.Children) != 2 || vecType.Children[0].Type != NodeSymbol || vecType.Children[0].Text != "Vec" ||
+				vecType.Children[1].Type != NodeSymbol {
+				return "", errors.New("emit_go: defn: unsupported compound parameter type (v0 only understands (Vec ElemType), a bare symbol)")
+			}
+			// The element type itself isn't actually needed for the Go representation (every
+			// element is `any` regardless) -- resolved anyway, discarding the result, purely as
+			// a real, honest validation that the declared element type is itself a real,
+			// supported type (catches a typo'd/unsupported element type here rather than letting
+			// it silently pass through unchecked).
+			if _, err = resolveGoType(vecType.Children[1].Text, knownStructs); err != nil {
+				return "", err
+			}
+			pType = "[]any"
+		} else {
+			return "", errors.New("emit_go: defn: unsupported parameter shape (v0 only understands plain " +
+				"(name : I32|F64|Bool|String|StructType|(Vec ElemType)) params, or (name : Arena @ Region))")
+		}
 		if err != nil {
 			return "", err
 		}
@@ -915,7 +1197,21 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]
 		scope.localParams[param.Children[0].Text] = true
 	}
 
-	if len(defn.Children) != 6 || defn.Children[3].Type != NodeColon {
+	if len(defn.Children) < 6 || defn.Children[3].Type != NodeColon {
+		return "", errors.New("emit_go: defn: expected (defn name [params] : RetType body) with exactly one body expression")
+	}
+	// Real, new capability: a return type carrying its own trailing `@ Region` annotation (every
+	// real .prn function returning a Vec/String/struct built into a caller-supplied Arena writes
+	// its return type this way, e.g. `(Vec I32) @ Region`) shifts the body's own real index by 2
+	// (the `@` node plus the Region symbol) -- found live, the same class of "real .prn shape v0
+	// had never actually needed to parse yet" gap Arena params above already hit. A bare return
+	// type with no region suffix (every defn this target supported before this pass) still works
+	// unchanged -- this only ADDS a case, it doesn't disturb the existing one.
+	bodyIdx := 5
+	if len(defn.Children) >= 8 && defn.Children[5].Type == NodeAt && defn.Children[6].Type == NodeSymbol {
+		bodyIdx = 7
+	}
+	if len(defn.Children) != bodyIdx+1 {
 		return "", errors.New("emit_go: defn: expected (defn name [params] : RetType body) with exactly one body expression")
 	}
 	retType, _, err := resolveGoReturnType(defn.Children[4], knownStructs)
@@ -923,7 +1219,7 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]
 		return "", err
 	}
 	scope.retType = retType
-	body, err := emitGoExpr(defn.Children[5], scope)
+	body, err := emitGoExpr(defn.Children[bodyIdx], scope)
 	if err != nil {
 		return "", err
 	}

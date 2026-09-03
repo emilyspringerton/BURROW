@@ -325,6 +325,30 @@ honest, unstarted: `defenum`, `Vec`, struct construction, and `loop`/`match` bey
 current v0 boundaries — a real CLI still needs at least `Vec` before "write a CLI in this" is
 fully true.
 
+**`Vec` shipped (2026-09-03)**, cruise-queue card 9988's own next-named prerequisite after
+`loop`/`recur`. Real, direct port of PARENA's own runtime representation to Go's own idiomatic
+equivalent: a bare `[]any` slice (`append` does the real dynamic-growth job C's own `vec_push_`
+hand-rolls; `any` does the real "erase to a pointer-ish box" job `void *` does) — no wrapper
+struct needed at all. **Real, honest consequence, named directly**: this target's own
+"GC-irrelevant, no heap allocation possible" claim no longer holds for `Vec`-using code (`append`
+is a real Go heap allocation) — a host relying on `debug.SetGCPercent(-1)` needs to know this.
+Real, necessary prerequisite found live: an `Arena @ Region` param and a return type's own
+trailing `@ Region` suffix had NO parsing at all before this pass — both now real and accepted
+(Arena params become a real, present, always-`nil`-from-the-host Go param typed `any`). **Real,
+deliberate v0 boundary for `vec/get`**: no per-Vec element-type tracking exists, so its result is
+always coerced to `int32` — right for every current real usage (`array.prn`'s shape vectors), a
+real, named gap for a `(Vec SomeStruct)` (`bstree.prn`'s own real counter-example). **Three real,
+genuine bugs found and fixed live**: pushed items defaulting to plain `int` (same class already
+hit twice this day); the real, common "a discarded side-effecting loop, then the real result"
+idiom (`array.prn`'s own `zeros`) breaking because a discarded expression's own internal boxing
+had always used the ENCLOSING defn's return type — fixed by giving non-final `do`/`let`
+statements their own `any`-retType scope; `recur` inside a `(do effect... (recur ...))` (the
+exact shape a Vec-building loop needs) not being recognized as a recur branch at all. `go test`:
+93/93 (5 new). **Real, live, end-to-end proof**: a real program building a `(Vec I32)` via a
+loop+`vec/push!`, reading it back via `vec/len`+`vec/get`+`deref`, compiled/linked/run — correct
+sums for n=0,5,10. Still real, honest, unstarted: `defenum`, struct construction,
+`(Vec SomeStruct)` element types, and `loop`/`match` beyond their own current v0 boundaries.
+
 ## Real risks and open questions, named honestly
 
 - **Scale**: this is a genuinely large project relative to everything else built this same

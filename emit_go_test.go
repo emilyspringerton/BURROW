@@ -696,3 +696,138 @@ func main() {
 		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
 	}
 }
+
+// TestEmitGoVecArenaParam -- real, new capability: an Arena @ Region param is accepted and typed
+// `any`, and a return type carrying its own trailing `@ Region` still resolves correctly.
+func TestEmitGoVecArenaParam(t *testing.T) {
+	g, err := buildGo(t, "(defn make [(dest : Arena @ Region)] : (Vec I32) @ Region\n"+
+		"  (vec/new dest))")
+	if err != nil {
+		t.Fatalf("an Arena @ Region param + a region-annotated Vec return type should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "func Make(dest any) []any {") {
+		t.Errorf("expected dest typed any and a []any return type: got %s", g)
+	}
+	if !strings.Contains(g, "[]any(nil)") {
+		t.Errorf("expected vec/new to emit a nil []any: got %s", g)
+	}
+}
+
+// TestEmitGoVecPushAndLen -- real construction + real length read.
+func TestEmitGoVecPushAndLen(t *testing.T) {
+	g, err := buildGo(t, "(defn count-em [(dest : Arena @ Region)] : I32\n"+
+		"  (let [v (vec/new dest)]\n"+
+		"    (do\n"+
+		"      (vec/push! &mut v 1)\n"+
+		"      (vec/push! &mut v 2)\n"+
+		"      (vec/len &v))))")
+	if err != nil {
+		t.Fatalf("vec/push!/vec/len should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "v = append(v, int32(1))") || !strings.Contains(g, "v = append(v, int32(2))") {
+		t.Errorf("expected real append calls with explicit int32 boxing: got %s", g)
+	}
+}
+
+// TestEmitGoVecPushFusedRef -- the OTHER real reference-token shape ("&v", no space, one fused
+// token) alongside "&mut v" (two tokens) already covered above.
+func TestEmitGoVecPushFusedRef(t *testing.T) {
+	g, err := buildGo(t, "(defn total [(v : (Vec I32))] : I32\n"+
+		"  (vec/len &v))")
+	if err != nil {
+		t.Fatalf("a fused &v reference should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "int32(len(v))") {
+		t.Errorf("expected a real len() call against v: got %s", g)
+	}
+}
+
+// TestEmitGoVecPushInvalidTargetIsError -- real, deliberate v0 boundary: the mutation target
+// must be a plain local or a get-field expression, not an arbitrary expression.
+func TestEmitGoVecPushInvalidTargetIsError(t *testing.T) {
+	_, err := buildGo(t, "(defn f [(dest : Arena @ Region)] : I32\n"+
+		"  (do (vec/push! &mut (vec/new dest) 1) 0))")
+	if err == nil {
+		t.Fatal("expected a real error -- (vec/new dest) is not a real Go l-value vec/push! can reassign")
+	}
+}
+
+// TestEmitGoVecEndToEndBuildsAndRuns -- real, live proof: a real .prn program builds a Vec via a
+// loop + vec/push! (the exact real "do a side effect, then recur" shape array.prn's own zeros
+// uses), then reads it back via vec/len + vec/get + deref, compiled via burrow, linked into a
+// real, separate Go module, and run.
+func TestEmitGoVecEndToEndBuildsAndRuns(t *testing.T) {
+	src := "(module vec-e2e)\n(export sum-of)\n" +
+		"(defn build [(n : I32) (dest : Arena @ Region)] : (Vec I32) @ Region\n" +
+		"  (let [v (vec/new dest)]\n" +
+		"    (do\n" +
+		"      (loop [i 0]\n" +
+		"        (if (>= i n) 0 (do (vec/push! &mut v i) (recur (+ i 1)))))\n" +
+		"      v)))\n" +
+		"(defn total [(v : (Vec I32))] : I32\n" +
+		"  (loop [i 0 acc 0]\n" +
+		"    (if (>= i (vec/len &v)) acc (recur (+ i 1) (+ acc (deref (vec/get &v i)))))))\n" +
+		"(defn sum-of [(n : I32) (dest : Arena @ Region)] : I32\n" +
+		"  (total (build n dest)))\n"
+
+	program, err := ParseProgram(src)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if err := RegionAnalyze(program); err != nil {
+		t.Fatalf("unexpected region-analyze error: %v", err)
+	}
+	g, err := EmitGo(program)
+	if err != nil {
+		t.Fatalf("unexpected emit error: %v", err)
+	}
+
+	dir := t.TempDir()
+	pkgDir := dir + "/burrowgen"
+	if err := os.Mkdir(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pkgDir+"/gen.go", []byte(g), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/go.mod", []byte("module vece2e\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainSrc := `package main
+
+import (
+	"fmt"
+
+	"vece2e/burrowgen"
+)
+
+func main() {
+	fmt.Println(burrowgen.SumOf(5, nil))
+	fmt.Println(burrowgen.SumOf(0, nil))
+	fmt.Println(burrowgen.SumOf(10, nil))
+}
+`
+	if err := os.WriteFile(dir+"/main.go", []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binPath := dir + "/bin"
+	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
+	buildCmd.Dir = dir
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("emitted Go failed to build (this is a real bug in emit_go.go, not the test): %v\n%s", err, out)
+	}
+
+	runCmd := exec.Command(binPath)
+	out, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the built binary failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	// sum(0..4)=10, sum of nothing=0, sum(0..9)=45 -- real, hand-computed.
+	want := "10\n0\n45\n"
+	if got != want {
+		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
+	}
+}
