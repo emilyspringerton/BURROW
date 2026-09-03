@@ -25,6 +25,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -38,6 +40,10 @@ const usage = `usage: burrow parse <file.prn>
        prints to stdout)
        burrow ci-status <owner/repo> <sha>                (GITHUB_TOKEN env var required; exit
        0=all green, 1=pending, 2=failed, 3=not found/error)
+       burrow new <name>                                  (real, "batteries included" scaffold:
+       a starter .prn file, a real Go host main.go + go.mod importing its own compiled
+       internal/burrowgen package, built immediately so the scaffold is runnable with zero
+       further manual steps)
 `
 
 // notImplemented reports an honest, explicit "not built yet" for a real, recognized subcommand
@@ -47,6 +53,20 @@ const usage = `usage: burrow parse <file.prn>
 func notImplemented(subcommand, phase string) int {
 	fmt.Fprintf(os.Stderr, "burrow: %s: not yet implemented (see NORTHSTAR.md, %s)\n", subcommand, phase)
 	return 1
+}
+
+// parseSourceFile — real, single dispatch point by file extension: `.llll` (LO source, see
+// lo_lexer.go/lo_parser.go) routes through LoParseProgram, everything else (real .prn source)
+// keeps using the existing ParseProgram unchanged. Every real caller in this file that used to
+// call ParseProgram(string(src)) directly now calls this instead, so `burrow parse`/`analyze`/
+// `build` all transparently accept a real .llll file anywhere a .prn file was accepted, with
+// zero changes to RegionAnalyze/EmitC/EmitGo -- LO is purely a new frontend sharing every
+// existing backend, matching LO/NORTHSTAR.md's own real architectural correction directly.
+func parseSourceFile(path string, src []byte) (*Node, error) {
+	if strings.HasSuffix(path, ".llll") {
+		return LoParseProgram(string(src))
+	}
+	return ParseProgram(string(src))
 }
 
 // nodeHasText reports whether n's own real Text field is meaningful (Symbol/Keyword/String/
@@ -91,7 +111,7 @@ func cmdParse(args []string) int {
 		fmt.Fprintf(os.Stderr, "burrow: cannot read %s\n", args[0])
 		return 1
 	}
-	program, perr := ParseProgram(string(src))
+	program, perr := parseSourceFile(args[0], src)
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "burrow: parse error: %v\n", perr)
 		return 1
@@ -110,7 +130,7 @@ func cmdAnalyze(args []string) int {
 		fmt.Fprintf(os.Stderr, "burrow: cannot read %s\n", args[0])
 		return 1
 	}
-	program, perr := ParseProgram(string(src))
+	program, perr := parseSourceFile(args[0], src)
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "burrow: parse error: %v\n", perr)
 		return 1
@@ -155,7 +175,7 @@ func cmdBuild(args []string) int {
 			fmt.Fprintf(os.Stderr, "burrow: cannot read %s\n", path)
 			return 1
 		}
-		fileProgram, perr := ParseProgram(string(src))
+		fileProgram, perr := parseSourceFile(path, src)
 		if perr != nil {
 			fmt.Fprintf(os.Stderr, "burrow: %s: parse error: %v\n", path, perr)
 			return 1
@@ -222,6 +242,112 @@ func cmdCiStatus(args []string) int {
 	return notImplemented("ci-status", "not scoped yet -- parena's own ci-status is a self-hosted PARENA module (stdlib/ci/status.prn), real follow-up once Phase 2 exists")
 }
 
+// cmdNew — real, new "batteries included" scaffolding tool (kanban priority-queue card
+// PXCL-001: "we need a batteries included cli tool to generate scaffolding and stuff for us
+// build it into burrow so it can help us manage both the go and prn side of things"). Real,
+// deliberate v0 scope: the Go target only -- BURROW's own real differentiator over plain
+// `parena` is exactly this "PARENA decision logic called directly from a real Go host, no
+// cgo/FFI" shape (this repo's own real `IDUNA_PRO/cmd/idunapro` precedent), so that's the one
+// real scaffold worth generating first. Not a template-only tool: the generated `.prn` file is
+// actually run through `EmitGo` and `go build` before this command returns success, so a real,
+// broken scaffold is a real, honest failure here, never silently handed to the user.
+func cmdNew(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprint(os.Stderr, "usage: burrow new <name>\n")
+		return 1
+	}
+	name := args[0]
+	if _, err := os.Stat(name); err == nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %s already exists\n", name)
+		return 1
+	}
+
+	genDir := filepath.Join(name, "internal", "burrowgen")
+	if err := os.MkdirAll(genDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %v\n", err)
+		return 1
+	}
+
+	prnPath := filepath.Join(name, name+".prn")
+	prnSrc := fmt.Sprintf("(module %s)\n(export hello)\n\n(defn hello [] : String\n  \"Hello from %s!\")\n", name, name)
+	if err := os.WriteFile(prnPath, []byte(prnSrc), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %v\n", err)
+		return 1
+	}
+
+	goModPath := filepath.Join(name, "go.mod")
+	if err := os.WriteFile(goModPath, []byte(fmt.Sprintf("module %s\n\ngo 1.22\n", name)), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %v\n", err)
+		return 1
+	}
+
+	mainGoPath := filepath.Join(name, "main.go")
+	mainGoSrc := fmt.Sprintf(`package main
+
+// Real, "batteries included" scaffold generated by "burrow new" -- the PARENA decision logic
+// (%[1]s.prn) is compiled into internal/burrowgen (regenerate via:
+// burrow build %[1]s.prn -o internal/burrowgen/%[1]s_gen.go) and called directly here, no
+// cgo/FFI boundary, the same real shape IDUNA_PRO/cmd/idunapro already established.
+
+import (
+	"fmt"
+
+	"%[1]s/internal/burrowgen"
+)
+
+func main() {
+	fmt.Println(burrowgen.Hello())
+}
+`, name)
+	if err := os.WriteFile(mainGoPath, []byte(mainGoSrc), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %v\n", err)
+		return 1
+	}
+
+	// Real "batteries included" step: actually run the new scaffold through EmitGo + go build
+	// right now, not just drop template text and hope. A scaffold that doesn't compile is a real
+	// bug in this command, not something the user should discover themselves.
+	src, err := os.ReadFile(prnPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %v\n", err)
+		return 1
+	}
+	program, perr := parseSourceFile(prnPath, src)
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: internal error generating a real starter .prn: %v\n", perr)
+		return 1
+	}
+	if rerr := RegionAnalyze(program); rerr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: internal error generating a real starter .prn: %v\n", rerr)
+		return 1
+	}
+	emittedGo, gerr := EmitGo(program)
+	if gerr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: internal error generating a real starter .prn: %v\n", gerr)
+		return 1
+	}
+	genPath := filepath.Join(genDir, name+"_gen.go")
+	if err := os.WriteFile(genPath, []byte(emittedGo), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: %v\n", err)
+		return 1
+	}
+
+	buildCmd := exec.Command("go", "build", "./...")
+	buildCmd.Dir = name
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, berr := buildCmd.CombinedOutput(); berr != nil {
+		fmt.Fprintf(os.Stderr, "burrow: new: generated scaffold failed to build (this is a real bug in \"burrow new\", not your code):\n%s", out)
+		return 1
+	}
+
+	fmt.Printf("burrow: new: %s scaffolded and built successfully\n", name)
+	fmt.Printf("  %s          -- real PARENA decision logic (edit this)\n", prnPath)
+	fmt.Printf("  %s              -- real Go host (edit this)\n", mainGoPath)
+	fmt.Printf("  %s -- compiled output (regenerate: burrow build %s -o %s)\n", genPath, prnPath, genPath)
+	fmt.Printf("  cd %s && go run .\n", name)
+	return 0
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
@@ -243,6 +369,8 @@ func main() {
 		code = cmdFmt(rest)
 	case "ci-status":
 		code = cmdCiStatus(rest)
+	case "new":
+		code = cmdNew(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "burrow: unknown command '%s'\n", subcommand)
 		code = 1

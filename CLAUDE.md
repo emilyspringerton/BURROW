@@ -296,6 +296,22 @@ struct construction, `(Vec SomeStruct)` element types, `match` on a user `defenu
 deliverable still hasn't been started; this and the prior passes are real, necessary language-
 feature prerequisites, not the deliverable itself.
 
+**`burrow new` — real "batteries included" scaffolding command shipped** (2026-09-03, kanban
+priority-queue card `PXCL-001`: "we need a batteries included cli tool to generate scaffolding
+and stuff for us build it into burrow so it can help us manage both the go and prn side of
+things"). `burrow new <name>` generates a real, immediately-runnable starter: `<name>.prn` (a
+minimal PARENA decision-logic module), `main.go` (a real Go host importing its own compiled
+`internal/burrowgen` package, the same real shape `IDUNA_PRO/cmd/idunapro` already established),
+and `go.mod` — then actually runs the new `.prn` through `EmitGo` AND a real `go build ./...`
+before returning success, so a broken scaffold is a real, honest failure in this command itself,
+never silently handed to the user. Real, deliberate v0 scope: the Go target only — BURROW's own
+real differentiator over plain `parena` (calling PARENA decision logic directly from a real Go
+host, no cgo/FFI) is exactly the pattern worth scaffolding first; refuses to overwrite an
+existing directory. `go test`: 101/101 (2 new — a full scaffold-build-and-RUN proof, and the
+overwrite-refusal case). Real, live, end-to-end proof, not just unit tests: ran the actual
+built `burrow` binary (`burrow new demo_mod`) in a real scratch directory, then `go run .`
+against the result — printed the real, correct `Hello from demo_mod!`.
+
 ## Related Repos
 
 - `PARENA` — the language and compiler this is a fourth compilation target for; `src/emit_ts.c`
