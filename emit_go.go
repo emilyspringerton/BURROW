@@ -156,9 +156,15 @@ type goEnumVariantInfo struct {
 // Go type strings (e.g. "int32", "string", a registered struct's PascalCase name). ErrorType is
 // only meaningful when Kind == "result" (an Option has no error variant to carry one for).
 type goDefnRetInfo struct {
-	Kind        string // "result" or "option"
+	Kind        string // "result", "option", or "enum" (kanban card 9988: match on a user defenum)
 	PayloadType string
 	ErrorType   string
+	// EnumName — only meaningful when Kind == "enum": the registered defenum's own real,
+	// mangled Go struct type name (matching goEnumVariantInfo.EnumName's own value exactly), so
+	// match can confirm every clause's pattern actually belongs to THIS scrutinee's enum, not
+	// some other registered defenum's variant that happens to share a name in the flat
+	// knownEnumVariants namespace.
+	EnumName string
 }
 
 // resolveGoReturnType — real, new capability alongside resolveGoType above: a defn's own
@@ -169,10 +175,22 @@ type goDefnRetInfo struct {
 // forms -- see emitResultOptionStructs' own doc comment for why these are fixed, not
 // per-instantiation, types) plus a *goDefnRetInfo when the return type IS Result/Option (nil
 // otherwise), so EmitGo's own first pass can register it for `match` to look up later.
-func resolveGoReturnType(typeNode *Node, knownStructs map[string]bool) (string, *goDefnRetInfo, error) {
+func resolveGoReturnType(typeNode *Node, knownStructs map[string]bool, knownEnumNames map[string]bool) (string, *goDefnRetInfo, error) {
 	if typeNode.Type == NodeSymbol {
 		t, err := resolveGoType(typeNode.Text, knownStructs)
-		return t, nil, err
+		if err != nil {
+			return "", nil, err
+		}
+		// A defn returning a bare, registered defenum type -- real, new capability (kanban card
+		// 9988's own next-named prerequisite: "match on a user defenum" -- named explicitly as
+		// unstarted in every prior status update on this card). Registered here, not inline in
+		// emitGoMatch, for the same real reason Result/Option already are: a match against a
+		// call to a defn declared LATER in the same file still needs this info collected in
+		// EmitGo's own up-front first pass.
+		if knownEnumNames[typeNode.Text] {
+			return t, &goDefnRetInfo{Kind: "enum", EnumName: t}, nil
+		}
+		return t, nil, nil
 	}
 	if typeNode.Type != NodeList || len(typeNode.Children) == 0 || typeNode.Children[0].Type != NodeSymbol {
 		return "", nil, errors.New("emit_go: unsupported return type form (v0 only understands a bare I32/F64/Bool/String/struct symbol, or a compound (Result Payload Error)/(Option Payload) form)")
@@ -775,21 +793,143 @@ var goMatchCounter int
 // defn) and why. Real, direct port of PARENA's own reference match codegen's overall SHAPE
 // (tag-dispatch via if/else-if, one clause body per real tag value) -- see this repo's own
 // BURROW/CLAUDE.md for the fuller real design writeup once shipped.
+// parseGoMatchPattern extracts a clause's own ctorName/bindName from the three real pattern
+// shapes match understands: `(Ctor bind-name)`, `(Ctor)`, or a bare `Ctor` symbol. Shared
+// between the Result/Option path and the user-defenum path below -- the pattern grammar itself
+// doesn't differ between them, only what a given ctorName is allowed to mean does.
+func parseGoMatchPattern(pattern *Node) (ctorName, bindName string, err error) {
+	switch {
+	case pattern.Type == NodeList && len(pattern.Children) == 2 && pattern.Children[0].Type == NodeSymbol && pattern.Children[1].Type == NodeSymbol:
+		return pattern.Children[0].Text, pattern.Children[1].Text, nil
+	case pattern.Type == NodeList && len(pattern.Children) == 1 && pattern.Children[0].Type == NodeSymbol:
+		return pattern.Children[0].Text, "", nil
+	case pattern.Type == NodeSymbol:
+		return pattern.Text, "", nil
+	default:
+		return "", "", errors.New("emit_go: match: unsupported pattern shape at line " + itoa(pattern.Line) +
+			" (v0 only understands (Ctor) or (Ctor bind-name))")
+	}
+}
+
+// emitGoMatchEnum handles match against a scrutinee whose defn returns a registered user
+// defenum -- real, new capability (kanban card 9988's own next-named prerequisite after
+// match/Result/loop/Vec/defenum: "match on a user defenum" was named explicitly as unstarted in
+// every status update on this card since defenum itself shipped). Unlike the Result/Option path
+// below (exactly 2 fixed clauses, fixed tag values 0/1), a user enum can have any real number of
+// variants with tags assigned in declaration order (goEnumVariantInfo.Tag) -- this requires real
+// exhaustiveness checking (every real variant of THIS enum covered exactly once) rather than the
+// Result/Option path's own "2 distinct tags" shortcut.
+func emitGoMatchEnum(expr *Node, scrutExpr, tmpVar string, info goDefnRetInfo, clauseNodes []*Node, scope *emitGoScope) (string, error) {
+	// The enum's own real, complete variant set (name -> tag), found by scanning
+	// knownEnumVariants for every entry belonging to this specific enum -- the flat, global
+	// variant namespace (see knownEnumVariants' own doc comment) has no reverse "list variants
+	// of enum X" index, so this scan is the real, direct way to get one.
+	realVariants := map[string]int{} // ctorName -> tag, restricted to this enum
+	for name, v := range scope.knownEnumVariants {
+		if v.EnumName == info.EnumName {
+			realVariants[name] = v.Tag
+		}
+	}
+
+	seenTags := map[int]bool{}
+	type enumBranch struct {
+		tag      int
+		bindStmt string
+		bodyExpr string
+	}
+	branchList := make([]enumBranch, 0, len(clauseNodes))
+
+	for _, clauseNode := range clauseNodes {
+		if clauseNode.Type != NodeList || len(clauseNode.Children) != 2 {
+			return "", errors.New("emit_go: match: each clause must be exactly (pattern body) at line " + itoa(clauseNode.Line))
+		}
+		ctorName, bindName, err := parseGoMatchPattern(clauseNode.Children[0])
+		if err != nil {
+			return "", err
+		}
+		v, ok := scope.knownEnumVariants[ctorName]
+		if !ok || v.EnumName != info.EnumName {
+			return "", errors.New("emit_go: match: '" + ctorName + "' is not a real variant of enum '" + info.EnumName +
+				"' at line " + itoa(clauseNode.Children[0].Line))
+		}
+		if bindName != "" && !v.HasPayload {
+			return "", errors.New("emit_go: match: '" + ctorName + "' carries no payload, it cannot bind a name at line " +
+				itoa(clauseNode.Children[0].Line))
+		}
+		if seenTags[v.Tag] {
+			return "", errors.New("emit_go: match: two clauses both match variant '" + ctorName + "' at line " +
+				itoa(clauseNode.Children[0].Line) + " -- exactly one clause per real variant")
+		}
+		seenTags[v.Tag] = true
+
+		childParams := make(map[string]bool, len(scope.localParams)+1)
+		for k, val := range scope.localParams {
+			childParams[k] = val
+		}
+		var bindStmt string
+		if bindName != "" {
+			childParams[bindName] = true
+			goBindName := strings.ReplaceAll(bindName, "-", "_")
+			// Real defenum variant payloads are boxed through `any` the same generic way
+			// Result/Option's own already are (goEnumVariantInfo's own doc comment) -- v0 has
+			// no per-variant payload TYPE tracked, so this binds as `any` rather than a
+			// specific concrete type the way Result/Option's PayloadType/ErrorType allow.
+			bindStmt = goBindName + " := " + tmpVar + ".Value\n_ = " + goBindName + "\n"
+		}
+		childScope := &emitGoScope{knownDefns: scope.knownDefns, localParams: childParams, defnRetInfo: scope.defnRetInfo, retType: scope.retType, knownEnumVariants: scope.knownEnumVariants}
+
+		bodyExpr, err := emitGoExpr(clauseNode.Children[1], childScope)
+		if err != nil {
+			return "", err
+		}
+		branchList = append(branchList, enumBranch{tag: v.Tag, bindStmt: bindStmt, bodyExpr: bodyExpr})
+	}
+
+	// Real exhaustiveness check: every real variant of this specific enum must be covered by
+	// exactly one clause -- unlike Result/Option's own fixed-2-variant shortcut, a user enum's
+	// real variant count isn't known until this scan, so this can't be inferred from clause
+	// count alone (a 3-variant enum matched with only 2 clauses must be a real, honest error,
+	// not a silently-incomplete match).
+	if len(seenTags) != len(realVariants) {
+		return "", errors.New("emit_go: match: not exhaustive at line " + itoa(expr.Line) +
+			" -- enum '" + info.EnumName + "' has " + itoa(len(realVariants)) + " real variant(s), this match covers " +
+			itoa(len(seenTags)) + " (v0 requires every variant to be matched, no wildcard clause yet)")
+	}
+
+	var branches strings.Builder
+	for i, b := range branchList {
+		if i == 0 {
+			branches.WriteString("if " + tmpVar + ".Tag == " + itoa(b.tag) + " {\n")
+		} else if i == len(branchList)-1 {
+			// Real, deliberate exhaustiveness shortcut, generalized from the Result/Option path's
+			// own 2-clause version: since seenTags is confirmed above to exactly equal
+			// realVariants (no gaps, no duplicates), the LAST clause is by elimination the one
+			// remaining real tag regardless of which it is -- emitted as a plain `else`, not a
+			// redundant tag check, so Go's own compiler sees a real, complete if/else chain.
+			branches.WriteString("} else {\n")
+		} else {
+			branches.WriteString("} else if " + tmpVar + ".Tag == " + itoa(b.tag) + " {\n")
+		}
+		branches.WriteString(b.bindStmt)
+		branches.WriteString("return " + scope.retType + "(" + b.bodyExpr + ")\n")
+	}
+	branches.WriteString("}\n")
+
+	return "func() any { " + tmpVar + " := " + scrutExpr + "\n" + branches.String() +
+		" }().(" + scope.retType + ")", nil
+}
+
 func emitGoMatch(expr *Node, scope *emitGoScope) (string, error) {
 	scrutNode := expr.Children[1]
 	clauseNodes := expr.Children[2:]
-	if len(clauseNodes) != 2 {
-		return "", errors.New("emit_go: match requires exactly 2 clauses at line " + itoa(expr.Line) +
-			" (v0 only supports Result/Option, which have exactly 2 real variants each -- no wildcard/defenum matching yet)")
-	}
 	if scrutNode.Type != NodeList || len(scrutNode.Children) == 0 || scrutNode.Children[0].Type != NodeSymbol {
-		return "", errors.New("emit_go: match's scrutinee must be a direct call to a known defn returning Result/Option at line " +
+		return "", errors.New("emit_go: match's scrutinee must be a direct call to a known defn returning Result/Option/a registered enum at line " +
 			itoa(scrutNode.Line) + " (v0 boundary: this emitter does not yet track per-variable types for a let-bound scrutinee)")
 	}
 	calleeName := scrutNode.Children[0].Text
 	info, ok := scope.defnRetInfo[calleeName]
 	if !ok {
-		return "", errors.New("emit_go: match: '" + calleeName + "' is not a known defn with a declared Result/Option return type at line " + itoa(scrutNode.Line))
+		return "", errors.New("emit_go: match: '" + calleeName + "' is not a known defn with a declared Result/Option/enum return type at line " + itoa(scrutNode.Line))
 	}
 	scrutExpr, err := emitGoExpr(scrutNode, scope)
 	if err != nil {
@@ -798,6 +938,19 @@ func emitGoMatch(expr *Node, scope *emitGoScope) (string, error) {
 
 	goMatchCounter++
 	tmpVar := "__match_tmp_" + itoa(goMatchCounter)
+
+	// User-defenum scrutinee -- real, new path (see emitGoMatchEnum's own doc comment). Handled
+	// as a real, separate function rather than folded into the loop below since exhaustiveness
+	// there works completely differently (a scan over the enum's own real variant set, not a
+	// fixed "2 distinct tags" shortcut).
+	if info.Kind == "enum" {
+		return emitGoMatchEnum(expr, scrutExpr, tmpVar, info, clauseNodes, scope)
+	}
+
+	if len(clauseNodes) != 2 {
+		return "", errors.New("emit_go: match requires exactly 2 clauses at line " + itoa(expr.Line) +
+			" (v0 only supports Result/Option, which have exactly 2 real variants each -- no wildcard/defenum matching yet)")
+	}
 
 	seenTags := map[int]bool{}
 	var branches strings.Builder
@@ -808,18 +961,9 @@ func emitGoMatch(expr *Node, scope *emitGoScope) (string, error) {
 		pattern := clauseNode.Children[0]
 		bodyNode := clauseNode.Children[1]
 
-		var ctorName, bindName string
-		switch {
-		case pattern.Type == NodeList && len(pattern.Children) == 2 && pattern.Children[0].Type == NodeSymbol && pattern.Children[1].Type == NodeSymbol:
-			ctorName = pattern.Children[0].Text
-			bindName = pattern.Children[1].Text
-		case pattern.Type == NodeList && len(pattern.Children) == 1 && pattern.Children[0].Type == NodeSymbol:
-			ctorName = pattern.Children[0].Text
-		case pattern.Type == NodeSymbol:
-			ctorName = pattern.Text
-		default:
-			return "", errors.New("emit_go: match: unsupported pattern shape at line " + itoa(pattern.Line) +
-				" (v0 only understands (Ctor) or (Ctor bind-name))")
+		ctorName, bindName, err := parseGoMatchPattern(pattern)
+		if err != nil {
+			return "", err
 		}
 
 		var tagValue int
@@ -874,7 +1018,7 @@ func emitGoMatch(expr *Node, scope *emitGoScope) (string, error) {
 			goBindName := strings.ReplaceAll(bindName, "-", "_")
 			bindStmt = goBindName + " := " + tmpVar + ".Value.(" + payloadType + ")\n_ = " + goBindName + "\n"
 		}
-		childScope := &emitGoScope{knownDefns: scope.knownDefns, localParams: childParams, defnRetInfo: scope.defnRetInfo, retType: scope.retType}
+		childScope := &emitGoScope{knownDefns: scope.knownDefns, localParams: childParams, defnRetInfo: scope.defnRetInfo, retType: scope.retType, knownEnumVariants: scope.knownEnumVariants}
 
 		bodyExpr, err := emitGoExpr(bodyNode, childScope)
 		if err != nil {
@@ -1327,7 +1471,10 @@ func emitGoDefn(defn *Node, knownDefns map[string]bool, knownStructs map[string]
 	if len(defn.Children) != bodyIdx+1 {
 		return "", errors.New("emit_go: defn: expected (defn name [params] : RetType body) with exactly one body expression")
 	}
-	retType, _, err := resolveGoReturnType(defn.Children[4], knownStructs)
+	// knownEnumNames not needed here -- the returned *goDefnRetInfo is discarded (`_`) below;
+	// this call only wants the resolved Go return-type string, which resolveGoType already
+	// produces identically whether or not the symbol happens to be a registered enum.
+	retType, _, err := resolveGoReturnType(defn.Children[4], knownStructs, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1369,6 +1516,13 @@ func EmitGo(program *Node) (string, error) {
 	// own mangled Go name), so a defenum can be used anywhere a defstruct already could be
 	// (a Result's own ErrorType, a param/return type) with zero new plumbing.
 	knownEnumVariants := map[string]goEnumVariantInfo{}
+	// knownEnumNames — real, new (kanban card 9988's own "match on a user defenum"): a plain
+	// set of registered defenum type NAMES (as opposed to knownEnumVariants, keyed by variant/
+	// constructor name), so resolveGoReturnType can tell "this defn returns a registered enum"
+	// apart from "this defn returns a registered struct" -- both currently live in the same
+	// knownStructs set (deliberately, per that set's own doc comment), which is fine for
+	// resolveGoType's purposes but not precise enough for match's own scrutinee-type lookup.
+	knownEnumNames := map[string]bool{}
 	for _, form := range program.Children {
 		if isCallNamed(form, "defn") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
 			knownDefns[form.Children[1].Text] = true
@@ -1378,6 +1532,7 @@ func EmitGo(program *Node) (string, error) {
 		}
 		if isCallNamed(form, "defenum") && len(form.Children) >= 2 && form.Children[1].Type == NodeSymbol {
 			knownStructs[form.Children[1].Text] = true
+			knownEnumNames[form.Children[1].Text] = true
 			_, variants, err := emitGoDefenum(form)
 			if err != nil {
 				return "", err
@@ -1400,7 +1555,7 @@ func EmitGo(program *Node) (string, error) {
 		if !isCallNamed(form, "defn") || len(form.Children) != 6 || form.Children[1].Type != NodeSymbol {
 			continue
 		}
-		_, info, err := resolveGoReturnType(form.Children[4], knownStructs)
+		_, info, err := resolveGoReturnType(form.Children[4], knownStructs, knownEnumNames)
 		if err != nil {
 			continue // a real error here is reported for real when the defn body itself is emitted below
 		}

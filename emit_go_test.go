@@ -970,3 +970,157 @@ func main() {
 		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
 	}
 }
+
+// TestEmitGoMatchOnUserDefenum -- real, new capability (kanban card 9988's own next-named
+// prerequisite after match/Result/loop/Vec/defenum: "match on a user defenum" was named as
+// unstarted in every status update on this card since defenum itself shipped). A 3-variant enum
+// (more than Result/Option's own fixed 2) confirms this isn't just a coincidental reuse of the
+// old 2-clause path.
+func TestEmitGoMatchOnUserDefenum(t *testing.T) {
+	g, err := buildGo(t, "(defenum Light (Red) (Yellow) (Green))\n"+
+		"(defn next-light [(x : I32)] : Light\n"+
+		"  (if (= x 0) Red (if (= x 1) Yellow Green)))\n"+
+		"(defn light-code [(x : I32)] : I32\n"+
+		"  (match (next-light x)\n"+
+		"    ((Red) 1)\n"+
+		"    ((Yellow) 2)\n"+
+		"    ((Green) 3)))")
+	if err != nil {
+		t.Fatalf("match on a real user-defenum-returning defn should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "NextLight(x)") {
+		t.Errorf("expected the real scrutinee call: got %s", g)
+	}
+	if !strings.Contains(g, ".Tag == 0") || !strings.Contains(g, ".Tag == 1") {
+		t.Errorf("expected real tag checks for at least 2 of the 3 real variants (the last is a plain else): got %s", g)
+	}
+}
+
+// TestEmitGoMatchOnUserDefenumWithPayload -- confirms a payload-carrying variant binds correctly
+// (boxed through `any`, since v0 has no per-variant payload type tracked -- see
+// emitGoMatchEnum's own doc comment).
+func TestEmitGoMatchOnUserDefenumWithPayload(t *testing.T) {
+	g, err := buildGo(t, "(defenum ParseError (EmptyInput) (Invalid (msg : String)))\n"+
+		"(defn classify [(n : I32)] : ParseError\n"+
+		"  (if (= n 0) EmptyInput (Invalid \"bad\")))\n"+
+		"(defn error-code [(n : I32)] : I32\n"+
+		"  (match (classify n)\n"+
+		"    ((EmptyInput) 1)\n"+
+		"    ((Invalid msg) 2)))")
+	if err != nil {
+		t.Fatalf("match on a user defenum with a payload-carrying variant should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, ".Value\n") {
+		t.Errorf("expected the payload-carrying clause to bind .Value (boxed through any): got %s", g)
+	}
+	if !strings.Contains(g, "_ = msg") {
+		t.Errorf("expected an explicit discard for the unused Invalid-clause binding: got %s", g)
+	}
+}
+
+// TestEmitGoMatchOnUserDefenumNotExhaustiveIsError -- real exhaustiveness check: a 3-variant
+// enum matched with only 2 clauses must be a real, honest error, unlike Result/Option's own
+// fixed "exactly 2 clauses" shortcut which can't even express this gap.
+func TestEmitGoMatchOnUserDefenumNotExhaustiveIsError(t *testing.T) {
+	_, err := buildGo(t, "(defenum Light (Red) (Yellow) (Green))\n"+
+		"(defn next-light [(x : I32)] : Light Red)\n"+
+		"(defn light-code [(x : I32)] : I32\n"+
+		"  (match (next-light x)\n"+
+		"    ((Red) 1)\n"+
+		"    ((Yellow) 2)))")
+	if err == nil {
+		t.Fatal("expected a real error: matching only 2 of a 3-variant enum's real variants is not exhaustive")
+	}
+}
+
+// TestEmitGoMatchOnUserDefenumWrongEnumVariantIsError -- a clause naming a real variant that
+// belongs to a DIFFERENT registered defenum than the scrutinee's own must be a real, honest
+// error, not silently mis-emitted (the flat, global knownEnumVariants namespace makes this a
+// real, checkable mistake to guard against, not just a hypothetical one).
+func TestEmitGoMatchOnUserDefenumWrongEnumVariantIsError(t *testing.T) {
+	_, err := buildGo(t, "(defenum Light (Red) (Green))\n"+
+		"(defenum Mood (Happy) (Sad))\n"+
+		"(defn next-light [(x : I32)] : Light Red)\n"+
+		"(defn light-code [(x : I32)] : I32\n"+
+		"  (match (next-light x)\n"+
+		"    ((Red) 1)\n"+
+		"    ((Happy) 2)))")
+	if err == nil {
+		t.Fatal("expected a real error: 'Happy' belongs to Mood, not Light -- matching it against a Light scrutinee should fail")
+	}
+}
+
+// TestEmitGoMatchOnUserDefenumEndToEndBuildsAndRuns — real, live proof, not just unit tests: a
+// real 3-variant defenum, matched exhaustively, compiled/linked/run for real.
+func TestEmitGoMatchOnUserDefenumEndToEndBuildsAndRuns(t *testing.T) {
+	src := "(module enum-match-e2e)\n(export light-code)\n" +
+		"(defenum Light\n  (Red)\n  (Yellow)\n  (Green))\n" +
+		"(defn next-light [(x : I32)] : Light\n" +
+		"  (if (= x 0) Red (if (= x 1) Yellow Green)))\n" +
+		"(defn light-code [(x : I32)] : I32\n" +
+		"  (match (next-light x)\n" +
+		"    ((Red) 1)\n" +
+		"    ((Yellow) 2)\n" +
+		"    ((Green) 3)))\n"
+
+	program, err := ParseProgram(src)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if err := RegionAnalyze(program); err != nil {
+		t.Fatalf("unexpected region-analyze error: %v", err)
+	}
+	g, err := EmitGo(program)
+	if err != nil {
+		t.Fatalf("unexpected emit error: %v", err)
+	}
+
+	dir := t.TempDir()
+	pkgDir := dir + "/burrowgen"
+	if err := os.Mkdir(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pkgDir+"/gen.go", []byte(g), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/go.mod", []byte("module matche2e\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainSrc := `package main
+
+import (
+	"fmt"
+
+	"matche2e/burrowgen"
+)
+
+func main() {
+	fmt.Println(burrowgen.LightCode(0))
+	fmt.Println(burrowgen.LightCode(1))
+	fmt.Println(burrowgen.LightCode(2))
+}
+`
+	if err := os.WriteFile(dir+"/main.go", []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binPath := dir + "/bin"
+	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
+	buildCmd.Dir = dir
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("emitted Go failed to build (this is a real bug in emit_go.go, not the test): %v\n%s", err, out)
+	}
+
+	runCmd := exec.Command(binPath)
+	out, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the built binary failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	// light-code(0)=1 (Red), light-code(1)=2 (Yellow), light-code(2)=3 (Green).
+	want := "1\n2\n3\n"
+	if got != want {
+		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
+	}
+}
