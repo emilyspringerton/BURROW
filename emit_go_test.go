@@ -553,3 +553,146 @@ func main() {
 		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
 	}
 }
+
+// TestEmitGoLoopTerminalInElseBranch -- the real, common shape array.prn's own product/sum
+// functions use: (if cond terminal (recur ...)).
+func TestEmitGoLoopTerminalInElseBranch(t *testing.T) {
+	g, err := buildGo(t, "(defn sum-to [(n : I32)] : I32\n"+
+		"  (loop [i 0 acc 0]\n"+
+		"    (if (> i n) acc (recur (+ i 1) (+ acc i)))))")
+	if err != nil {
+		t.Fatalf("a loop with recur in the else branch should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "for {") {
+		t.Errorf("expected a real Go for-loop: got %s", g)
+	}
+	if !strings.Contains(g, "continue") {
+		t.Errorf("expected the recur branch to continue the loop: got %s", g)
+	}
+}
+
+// TestEmitGoLoopTerminalInThenBranch -- the other real ordering: (if cond (recur ...) terminal).
+func TestEmitGoLoopTerminalInThenBranch(t *testing.T) {
+	g, err := buildGo(t, "(defn sum-to [(n : I32)] : I32\n"+
+		"  (loop [i 0 acc 0]\n"+
+		"    (if (<= i n) (recur (+ i 1) (+ acc i)) acc)))")
+	if err != nil {
+		t.Fatalf("a loop with recur in the then branch should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "for {") {
+		t.Errorf("expected a real Go for-loop: got %s", g)
+	}
+}
+
+// TestEmitGoLoopBindingDoesNotLeakOutside -- same real scoping discipline as let's own leak test.
+func TestEmitGoLoopBindingDoesNotLeakOutside(t *testing.T) {
+	_, err := buildGo(t, "(defn broken [(n : I32)] : I32\n"+
+		"  (if (> n 0) (loop [i 0] (if (> i n) i (recur (+ i 1)))) i))")
+	if err == nil {
+		t.Fatal("expected a real 'unknown identifier' error -- i is scoped to the loop, not the sibling else branch")
+	}
+	if !strings.Contains(err.Error(), "unknown identifier 'i'") {
+		t.Errorf("expected the real unknown-identifier error naming i specifically: got %v", err)
+	}
+}
+
+// TestEmitGoLoopRecurInBothBranchesIsError -- real, honest boundary: a loop needs exactly one
+// terminal branch and one recur branch, not two of either.
+func TestEmitGoLoopRecurInBothBranchesIsError(t *testing.T) {
+	_, err := buildGo(t, "(defn broken [(n : I32)] : I32\n"+
+		"  (loop [i 0] (if (> i n) (recur i) (recur (+ i 1)))))")
+	if err == nil {
+		t.Fatal("expected a real error -- recur in both branches leaves no real terminal value")
+	}
+}
+
+// TestEmitGoLoopArityMismatchIsError -- recur must supply exactly as many arguments as bindings.
+func TestEmitGoLoopArityMismatchIsError(t *testing.T) {
+	_, err := buildGo(t, "(defn broken [(n : I32)] : I32\n"+
+		"  (loop [i 0 acc 0] (if (> i n) acc (recur (+ i 1)))))")
+	if err == nil {
+		t.Fatal("expected a real arity-mismatch error -- recur supplies 1 argument for 2 loop bindings")
+	}
+}
+
+// TestEmitGoLoopNestedIfBodyIsError -- real, deliberate v0 boundary named explicitly in
+// emitGoLoop's own doc comment: recur nested deeper than a single top-level if is not supported.
+func TestEmitGoLoopNestedIfBodyIsError(t *testing.T) {
+	_, err := buildGo(t, "(defn broken [(n : I32)] : I32\n"+
+		"  (loop [i 0] (+ 1 (if (> i n) i (recur (+ i 1))))))")
+	if err == nil {
+		t.Fatal("expected a real error -- the loop body here is a binop wrapping an if, not a bare top-level if")
+	}
+}
+
+// TestEmitGoLoopEndToEndBuildsAndRuns -- real, live proof: a real .prn loop (sum-to, matching
+// array.prn's own real product/sum shape) compiled via burrow, linked into a real, separate Go
+// module, run, and checked against the hand-computed correct answer (triangular number formula).
+func TestEmitGoLoopEndToEndBuildsAndRuns(t *testing.T) {
+	src := "(module loop-e2e)\n(export sum-to)\n" +
+		"(defn sum-to [(n : I32)] : I32\n" +
+		"  (loop [i 0 acc 0]\n" +
+		"    (if (> i n) acc (recur (+ i 1) (+ acc i)))))\n"
+
+	program, err := ParseProgram(src)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if err := RegionAnalyze(program); err != nil {
+		t.Fatalf("unexpected region-analyze error: %v", err)
+	}
+	g, err := EmitGo(program)
+	if err != nil {
+		t.Fatalf("unexpected emit error: %v", err)
+	}
+
+	dir := t.TempDir()
+	pkgDir := dir + "/burrowgen"
+	if err := os.Mkdir(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pkgDir+"/gen.go", []byte(g), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/go.mod", []byte("module loope2e\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainSrc := `package main
+
+import (
+	"fmt"
+
+	"loope2e/burrowgen"
+)
+
+func main() {
+	fmt.Println(burrowgen.SumTo(0))
+	fmt.Println(burrowgen.SumTo(1))
+	fmt.Println(burrowgen.SumTo(10))
+	fmt.Println(burrowgen.SumTo(100))
+}
+`
+	if err := os.WriteFile(dir+"/main.go", []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binPath := dir + "/bin"
+	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
+	buildCmd.Dir = dir
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("emitted Go failed to build (this is a real bug in emit_go.go, not the test): %v\n%s", err, out)
+	}
+
+	runCmd := exec.Command(binPath)
+	out, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the built binary failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	// 0, 0+1=1, 0+..+10=55, 0+..+100=5050 -- real, hand-computed triangular numbers.
+	want := "0\n1\n55\n5050\n"
+	if got != want {
+		t.Fatalf("wrong real runtime output: got %q, want %q", got, want)
+	}
+}

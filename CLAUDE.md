@@ -146,6 +146,44 @@ four real cases (`describe-div(10,2)=5`, `describe-div(10,0)=-1`, `describe-half
 `Vec` for building up output before "write a CLI in this" is fully true; this closes the second
 real biggest blocker (real error handling), not the last one.
 
+**`loop`/`recur` added to the Go emission target** (2026-09-03, cruise-queue card 9988's own
+next-named prerequisite: "loop in particular is a real, necessary prerequisite for any real
+iteration a CLI would need," from this same day's earlier match/Result changelog entry). Real,
+deliberate v0 boundary, named explicitly, not silently limited: the loop body must be exactly one
+top-level `(if cond then else)` with `recur` in exactly one branch (the other branch is the loop's
+own terminal value) — the exact real shape every actual `.prn` loop in `stdlib/array.prn` uses
+(`product`/`sum`: `(if (>= i n) acc (recur (+ i 1) ...))`). `recur` nested inside a deeper
+`if`/`cond`/`match` chain is real, separate, unstarted work — PARENA's own mature `src/emit.c`
+needed a `loop_locals` array threaded through `emit_loop_tail`/`emit_match_core`/nested-`if`
+dispatch across several distinct bug-fix passes to get that fully general case right for its own
+C target, the same real judgment call `match`'s own v0 boundary above already made. Real design:
+bindings become real Go locals declared once before a real `for {}`; the terminal branch returns
+(boxed through the same `any`/`RetType` mechanism every other construct in this file uses); the
+`recur` branch computes every new binding value into its own temp variable BEFORE reassigning any
+of them (a real simultaneous-assignment requirement — `(recur acc i)` swapping two loop vars would
+silently break without it) and `continue`s. Bindings are evaluated into a cloned local-params map,
+same leak-prevention discipline as `let`.
+
+**Real, genuine bug found and fixed live testing this** (a real `(loop [i 0 acc 0] (if (> i n)
+acc (recur ...)))` probe): `i := 0` lets Go infer `int`, not `int32`, for the same real reason the
+`if` case's own branch-boxing needed an explicit `RetType(...)` conversion — an untyped integer
+constant's own Go default doesn't match this emitter's `I32` → `int32` convention. Fixed by
+declaring every non-string/non-bool loop binding as `var name int32 = expr` instead of `name :=
+expr` (Go allows an untyped constant to implicitly convert to a var's own declared type) — a
+real, honestly-named v0 boundary itself: every real loop binding in this stdlib today is I32, so
+this is right for the actual current corpus and fails LOUD (a real Go compile error) rather than
+silently wrong if a future non-I32 loop binding ever needs this path. `go test`: 88/88 total (7
+new — recur in either branch, the no-leak proof, recur-in-both-branches and arity-mismatch
+errors, the nested-if-body v0-boundary error, and a real end-to-end `go build`-and-run test).
+**Real, live, end-to-end proof, not just unit tests**: a real `sum-to` (triangular-number loop)
+compiled via `burrow build`, linked into a real, separate Go module via `go build`, and run —
+correct output for `sum-to(0)=0`, `sum-to(1)=1`, `sum-to(10)=55`, `sum-to(100)=5050`. A second,
+manual probe (`factorial`/`count-down-check`, exercising both branch orderings and a
+single-binding loop) compiled via the real `burrow` CLI and run the same way, also correct
+(`factorial(5)=120`, `factorial(0)=1`, `count-down-check(3)=true`). Still real, honest, unstarted:
+`defenum`, `Vec`, struct construction, and `loop`/`match` beyond their own current v0 boundaries —
+a real "write a CLI in this" bar still needs at least `Vec` for building up output.
+
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the
 BURROW editor," a unified terminal emulator + editor rewriting `PITVIPER` and PARENA's own

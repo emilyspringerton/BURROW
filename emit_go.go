@@ -10,9 +10,12 @@
 // (scalar I32/F64/Bool/String params, no Arena/region annotations, a body that is exactly ONE
 // real expression: number/symbol literals, the real binop set, `if` as a real Go conditional
 // expression via an inline func-literal ternary substitute -- Go has no `?:`, see emitGoExpr's
-// own "if" case -- and calls to another top-level `defn`) -- NOT the full `emit.c`. Growing this
-// scope (defstruct/defenum/match/loop/Result/Vec) is real, separate, unstarted work, same as
-// every other emit_*.go's own honest boundary.
+// own "if" case -- and calls to another top-level `defn`) -- NOT the full `emit.c`, though
+// `defstruct`/`let`/`do`/`match`/`Result`/`Option`/a real, narrow v0 `loop`/`recur` have since
+// grown on top of that original scope (see this file's own doc comments on each). Growing this
+// further (`defenum`, `Vec`, general struct construction, `loop`/`match` beyond their own current
+// v0 boundaries) is real, separate, unstarted work, same as every other emit_*.go's own honest
+// boundary.
 //
 // GC-off-safe by construction, matching NORTHSTAR.md's own "The real, honest GC-off design
 // question" section directly: v0-scope emitted functions have scalar params, one-expression
@@ -399,6 +402,25 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 		return emitGoMatch(expr, scope)
 	}
 
+	// loop/recur -- real, new capability (kanban cruise-queue card 9988's own next-named
+	// prerequisite: "loop in particular is a real, necessary prerequisite for any real iteration
+	// a CLI would need," per this session's own earlier match/Result changelog entry). Real,
+	// deliberate v0 boundary, named explicitly, not silently limited: the loop body must be
+	// EXACTLY one top-level `(if cond then else)` with `recur` appearing directly in ONE of the
+	// two branches, the other branch being the loop's own terminal value -- the exact real shape
+	// every actual .prn loop in this stdlib's own array.prn uses (`product`/`sum`:
+	// `(if (>= i n) acc (recur (+ i 1) ...))`). `recur` nested inside a deeper `if`/`cond`/`match`
+	// chain, or a loop with more than one body expression, is a real, honest, separate, larger
+	// undertaking -- PARENA's own mature `src/emit.c` needed a `loop_locals` array threaded
+	// through `emit_loop_tail`/`emit_match_core`/nested-`if` dispatch, several distinct bug-fix
+	// passes, to get that fully general case right for its own C target; not rushed past here,
+	// same real judgment call `emitGoMatch`'s own doc comment already makes for its own v0
+	// boundary. A loop body outside this shape gets a real, honest compile error naming the exact
+	// limitation, not a silently wrong emission.
+	if head == "loop" {
+		return emitGoLoop(expr, scope)
+	}
+
 	// `(not x)` -- real, same unary-operator gap emit_c.go's own real fix just closed, same day,
 	// same real trigger (stdlib/k8s/operator.prn's own `(if (not exists) ...)`); Go's own `!`
 	// negation operator is the direct equivalent.
@@ -650,6 +672,159 @@ func emitGoMatch(expr *Node, scope *emitGoScope) (string, error) {
 
 	return "func() any { " + tmpVar + " := " + scrutExpr + "\n" + branches.String() +
 		" }().(" + scope.retType + ")", nil
+}
+
+// goLoopCounter -- real, direct analog of goMatchCounter above (itself a direct analog of
+// PARENA's own reference `static int match_counter`): gives every real loop's own recur-argument
+// temp variables a unique name, so nested/sibling loops within the same defn never collide.
+var goLoopCounter int
+
+// isRecurCall reports whether node is a direct `(recur ...)` call -- the one thing this v0
+// recognizes as "this branch continues the loop" (see emitGoLoop's own doc comment for the real,
+// deliberate v0 boundary this implies: recur must appear directly here, not nested deeper).
+func isRecurCall(node *Node) bool {
+	return node.Type == NodeList && len(node.Children) >= 1 &&
+		node.Children[0].Type == NodeSymbol && node.Children[0].Text == "recur"
+}
+
+// emitGoLoop -- see emitGoExpr's own "loop" case for the real, deliberate v0 boundary this
+// implements (body must be exactly one top-level `(if cond then else)`, `recur` in exactly one
+// branch) and why. Real, direct port of PARENA's own reference C emitter's overall SHAPE for this
+// exact common case (bindings become mutable locals, the loop body becomes a real `for {}`, a
+// terminal branch returns, a `recur` branch reassigns the locals and continues) -- narrower than
+// `src/emit.c`'s own fully general `loop_locals`-threaded version, which also handles `recur`
+// nested inside `match`/deeper `if`/`cond` chains; that generality is real, separate, later work.
+func emitGoLoop(expr *Node, scope *emitGoScope) (string, error) {
+	if len(expr.Children) != 3 || expr.Children[1].Type != NodeVec {
+		return "", errors.New("emit_go: loop v0 requires exactly (loop [name init ...] (if cond then else)) -- see emitGoLoop's own doc comment for the real, deliberate scope this v0 covers")
+	}
+	bindings := expr.Children[1]
+	if len(bindings.Children)%2 != 0 {
+		return "", errors.New("emit_go: loop bindings vector must have an even number of elements (name init pairs)")
+	}
+	if len(bindings.Children) == 0 {
+		return "", errors.New("emit_go: loop v0 requires at least one binding")
+	}
+	body := expr.Children[2]
+	if body.Type != NodeList || len(body.Children) != 4 || body.Children[0].Type != NodeSymbol || body.Children[0].Text != "if" {
+		return "", errors.New("emit_go: loop v0 body must be a single top-level (if cond then else) -- recur nested inside match/cond/a deeper if is real, separate, unstarted work")
+	}
+
+	// Real, deliberate design match to `let`'s own precedent: bindings are evaluated into a
+	// CLONED local-params map, sequentially (a later binding's own init expression can reference
+	// an earlier one, matching array.prn's own real usage shape), and never leak outside the loop.
+	childParams := make(map[string]bool, len(scope.localParams)+len(bindings.Children)/2)
+	for k, v := range scope.localParams {
+		childParams[k] = v
+	}
+	childScope := &emitGoScope{knownDefns: scope.knownDefns, localParams: childParams, retType: scope.retType, defnRetInfo: scope.defnRetInfo}
+
+	var initStmts []string
+	var names []string
+	for i := 0; i+1 < len(bindings.Children); i += 2 {
+		nameNode := bindings.Children[i]
+		valNode := bindings.Children[i+1]
+		if nameNode.Type != NodeSymbol {
+			return "", errors.New("emit_go: loop binding name must be a plain symbol")
+		}
+		valE, err := emitGoExpr(valNode, childScope)
+		if err != nil {
+			return "", err
+		}
+		childScope.localParams[nameNode.Text] = true
+		names = append(names, nameNode.Text)
+		goName := mangleGoLocal(nameNode.Text, childScope)
+		// Real, genuine bug found and fixed here testing this for real (a real (loop [i 0 acc 0]
+		// (if (> i n) ...)) probe): `i := 0` lets Go infer `i`'s own type from the untyped
+		// constant `0`, which defaults to `int` -- the SAME real "I32 defaults to the wrong Go
+		// type" class of bug the "if" case above already found and fixed for its own branch
+		// values, just hitting a `:=` declaration instead of an `any`-boxing conversion this time.
+		// A String literal or bare true/false already gets the right concrete Go type from `:=`
+		// on its own (Go's own untyped-constant defaults for those already coincide with this
+		// emitter's own resolved types, same real exception the "if" case's own doc comment
+		// notes) -- only the numeric case needs help. Real, honest, narrower-than-ideal v0 fix:
+		// every other loop binding (every real .prn loop in this stdlib's own array.prn is
+		// I32-only today) is declared with an explicit `var name int32 = expr` instead of `:=` --
+		// Go allows an untyped constant expression to implicitly convert to a var's own declared
+		// type, so this both fixes the defaulting bug AND still fails loudly (a real Go compile
+		// error, not a silent wrong value) if a future non-I32 loop binding ever actually needs
+		// this path, rather than guessing wrong and running anyway.
+		if valNode.Type == NodeString || (valNode.Type == NodeSymbol && (valNode.Text == "true" || valNode.Text == "false")) {
+			initStmts = append(initStmts, goName+" := "+valE)
+		} else {
+			initStmts = append(initStmts, "var "+goName+" int32 = "+valE)
+		}
+	}
+
+	condE, err := emitGoExpr(body.Children[1], childScope)
+	if err != nil {
+		return "", err
+	}
+	thenNode, elseNode := body.Children[2], body.Children[3]
+	thenIsRecur, elseIsRecur := isRecurCall(thenNode), isRecurCall(elseNode)
+	if thenIsRecur == elseIsRecur {
+		return "", errors.New("emit_go: loop v0 requires recur in exactly one branch of the if (the other branch is the loop's own terminal value)")
+	}
+	recurNode, terminalNode := thenNode, elseNode
+	if elseIsRecur {
+		recurNode, terminalNode = elseNode, thenNode
+	}
+	if len(recurNode.Children)-1 != len(names) {
+		return "", errors.New("emit_go: recur requires exactly as many arguments as loop bindings (" + itoa(len(names)) + ")")
+	}
+
+	terminalE, err := emitGoExpr(terminalNode, childScope)
+	if err != nil {
+		return "", err
+	}
+
+	// Real correctness requirement, same reason a simultaneous multi-variable reassignment needs
+	// it in any language: every recur argument must be computed from the OLD binding values
+	// before ANY binding is overwritten (`(recur acc i)` swapping two loop vars would silently
+	// break if the first assignment clobbered a value the second argument still needed to read).
+	// Real temp variables, uniquely named per loop via goLoopCounter, sidestep this exactly the
+	// way a real simultaneous-assignment lowering always does.
+	goLoopCounter++
+	loopID := goLoopCounter
+	var recurTmp []string
+	var recurAssign []string
+	for i, argNode := range recurNode.Children[1:] {
+		argE, err := emitGoExpr(argNode, childScope)
+		if err != nil {
+			return "", err
+		}
+		tmp := "__loop_tmp_" + itoa(loopID) + "_" + itoa(i)
+		recurTmp = append(recurTmp, tmp+" := "+argE)
+		recurAssign = append(recurAssign, mangleGoLocal(names[i], childScope)+" = "+tmp)
+	}
+
+	var b strings.Builder
+	b.WriteString("func() any {\n")
+	for _, s := range initStmts {
+		b.WriteString(s + "\n")
+	}
+	b.WriteString("for {\n")
+	b.WriteString("if " + condE + " {\n")
+	if thenIsRecur {
+		for _, s := range recurTmp {
+			b.WriteString(s + "\n")
+		}
+		for _, s := range recurAssign {
+			b.WriteString(s + "\n")
+		}
+		b.WriteString("continue\n} else {\nreturn " + scope.retType + "(" + terminalE + ")\n}\n")
+	} else {
+		b.WriteString("return " + scope.retType + "(" + terminalE + ")\n} else {\n")
+		for _, s := range recurTmp {
+			b.WriteString(s + "\n")
+		}
+		for _, s := range recurAssign {
+			b.WriteString(s + "\n")
+		}
+		b.WriteString("continue\n}\n")
+	}
+	b.WriteString("}\n}().(" + scope.retType + ")")
+	return b.String(), nil
 }
 
 // mangleGoLocal — a bare symbol reference inside a body is either a LOCAL param or let-binding

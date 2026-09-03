@@ -302,6 +302,29 @@ construction — a real CLI still needs `loop` for iteration and likely `Vec` fo
 before "write a CLI in this" is fully true; this closes the second biggest real blocker (real
 error handling), not the last one.
 
+**`loop`/`recur` shipped (2026-09-03)**, cruise-queue card 9988's own next-named prerequisite
+from the entry above. **Real, deliberate v0 boundary, named not hidden**: the loop body must be
+exactly one top-level `(if cond then else)` with `recur` in exactly one branch — the exact real
+shape every actual `.prn` loop in `stdlib/array.prn` uses; `recur` nested inside a deeper
+`if`/`cond`/`match` chain is real, separate, unstarted work, the same real judgment call `match`'s
+own v0 boundary already made (PARENA's own mature `src/emit.c` needed a `loop_locals` array
+threaded through several nested-dispatch sites across multiple bug-fix passes to get that fully
+general case right). Real design: bindings become real Go locals before a real `for {}`; the
+terminal branch returns through the same `any`/`RetType` boxing every other construct here uses;
+the `recur` branch computes every new binding value into its own temp variable BEFORE reassigning
+any of them (a real simultaneous-assignment requirement) and `continue`s. **Real, genuine bug
+found and fixed live**: `i := 0` lets Go infer `int`, not `int32` — the same class of defaulting
+bug the `if` case's own branch-boxing already needed a fix for, just hitting a `:=` declaration
+this time; fixed by declaring non-string/non-bool loop bindings as `var name int32 = expr`
+instead (real, honestly-named v0 boundary: every real loop binding in this stdlib today is I32;
+a future non-I32 binding fails loud, not silently wrong). `go test`: 88/88 (7 new). **Real, live,
+end-to-end proof**: a real triangular-number `sum-to` loop compiled via `burrow build`,
+`go build`-linked, and run — correct for `n=0,1,10,100`; a second manual probe
+(`factorial`/`count-down-check`) exercising both branch orderings, also correct. Still real,
+honest, unstarted: `defenum`, `Vec`, struct construction, and `loop`/`match` beyond their own
+current v0 boundaries — a real CLI still needs at least `Vec` before "write a CLI in this" is
+fully true.
+
 ## Real risks and open questions, named honestly
 
 - **Scale**: this is a genuinely large project relative to everything else built this same
