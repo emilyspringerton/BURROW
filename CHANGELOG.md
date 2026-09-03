@@ -1,3 +1,25 @@
+## 2026-09-03 (2)
+- feat: `let`/`do` added to the Go emission target (emit_go.go), closing kanban priority-queue
+  cards 1199/9988 ("iterate on project burrow... so that parena gets transformed into idiomatic
+  go" / "emily for business CLI written in GO with BURROW"). Real, decisive finding: v0's own
+  "one-expression body" scope meant no real `.prn` function could declare a local variable at
+  all -- the single largest real gap blocking any real multi-statement logic (a CLI's own arg
+  parsing, string building, sequential setup) from reaching this target. Emitted as the exact
+  same immediately-invoked-func-literal-boxed-through-`any` shape the `if` case already uses, so
+  `let`/`do` compose with `if` (and each other) for free -- a `let` nested inside an `if` branch
+  always hands back a concrete, correctly-typed value to whatever wraps it. `let` bindings
+  evaluate into a cloned local-params map, not the enclosing scope's own, so a binding never
+  leaks outside its own `let` -- proven by a real test asserting the exact "unknown identifier"
+  error a leak would otherwise silently avoid. 7 new tests (single/multi-binding let,
+  sequential-scope chaining, the no-leak proof, nested-let-inside-if composition, `do`'s own
+  effect-then-result sequencing). `go build/vet/test` all clean, 73/73 total (66 prior + 7 new),
+  zero regressions. Live-verified end to end, not just unit tests: a real two-binding `let`
+  (`double-it`) and a real nested `let`-inside-`if` (`clamp-and-double`) both compiled via
+  `burrow build`, linked into a real, separate Go module via `go build`, and run -- correct
+  output for both (11, 10, 0). Still real, honest, unstarted: `defenum`/`match`/`loop`/`Result`/
+  `Vec`, struct construction -- a real CLI needs `match`/`Result` and `loop` too before "write a
+  CLI in this" is fully true. (sess-20260902-2008-ed50169e)
+
 ## 2026-09-03
 - feat: defstruct/get-field support added to the C emitter (emit_c.go), closing the exact real gap DUNG/parena/rect_probe.prn found live on 2026-08-30 ("emit_c: unsupported top-level form"). Founder real-time: "CONTINUE WORKING ON DUNG IDE write it in LO" -> investigated LO integration, found LO itself not ready (mod-4-only arithmetic, no runtime-parameterized exported functions yet, see LO/NORTHSTAR.md) -> "ok write it in parena and go? right? with burrow" -> the real next step was unblocking this exact gap. Ported directly from emit_go.go's own real, already-shipped struct support: a registered defstruct emits a real C `typedef struct {...} Name;`, get-field lowers to plain `(record).field` dot access, passed by value, construction deliberately not emitted (same "receives, doesn't construct" split the Go target already established). Real, C-specific difference from the Go port: struct typedefs collected into their own slice, emitted FIRST before any function decl/def -- a real ordering constraint C has that Go doesn't need. 3 new tests (2 mirrored from emit_go_test.go's own struct tests adapted for C, 1 new ordering-specific test). Verified live, not just unit tests: a real .prn file with a Rect-shaped struct compiled via `burrow build`, the emitted C compiled clean with `gcc -Wall -Wextra`, and ran with the correct result ((1440-20)/2 = 710) against a real test harness. go build/vet/test all clean, 66/66 total. (sess-20260902-2008-ed50169e)
 

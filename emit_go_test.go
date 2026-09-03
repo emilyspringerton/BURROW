@@ -233,3 +233,92 @@ func TestEmitGoPredicateNameMangling(t *testing.T) {
 		t.Errorf("expected '?' mangled to '_' matching emit_c.go's own convention: got %s", g)
 	}
 }
+
+// TestEmitGoLetSingleBinding -- real, new capability (kanban card 1199/9988): the single largest
+// real gap blocking any real multi-statement .prn function from reaching this target at all --
+// v0 had no let-bindings whatsoever before this.
+func TestEmitGoLetSingleBinding(t *testing.T) {
+	g, err := buildGo(t, "(defn double-it [(x : I32)] : I32\n  (let [y (* x 2)] y))")
+	if err != nil {
+		t.Fatalf("a single-binding let should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "y := ") {
+		t.Errorf("expected a real Go local variable declaration for the let binding: got %s", g)
+	}
+	if !strings.Contains(g, "x * 2") {
+		t.Errorf("expected the binding's own expression to be emitted: got %s", g)
+	}
+}
+
+// TestEmitGoLetMultipleBindingsSequentialScope -- a later binding can reference an earlier one
+// (real, ordinary let semantics), and the let's own final body expression is the real result.
+func TestEmitGoLetMultipleBindingsSequentialScope(t *testing.T) {
+	g, err := buildGo(t, "(defn compute [(x : I32)] : I32\n  (let [a (+ x 1) b (* a 2)] b))")
+	if err != nil {
+		t.Fatalf("multi-binding let with sequential scope should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "a := ") || !strings.Contains(g, "b := ") {
+		t.Errorf("expected both real Go local declarations: got %s", g)
+	}
+	if !strings.Contains(g, "a * 2") {
+		t.Errorf("expected the second binding to reference the first by its real local name: got %s", g)
+	}
+}
+
+// TestEmitGoLetBindingDoesNotLeakOutsideLet -- real, deliberate scope check: a name bound inside
+// one let must not be visible to an expression outside it, even in the same function (e.g. two
+// sibling lets, or a let followed by plain code) -- confirms the childParams CLONE (not mutating
+// scope's own map) actually works, not just that it compiles once.
+func TestEmitGoLetBindingDoesNotLeakOutsideLet(t *testing.T) {
+	_, err := buildGo(t, "(defn broken [(x : I32)] : I32\n  (if (> x 0) (let [y (* x 2)] y) y))")
+	if err == nil {
+		t.Fatal("expected a real 'unknown identifier' error -- y is scoped to the let's own branch, not the sibling else branch")
+	}
+	if !strings.Contains(err.Error(), "unknown identifier 'y'") {
+		t.Errorf("expected the real unknown-identifier error naming y specifically: got %v", err)
+	}
+}
+
+// TestEmitGoNestedLetInsideIf -- real, deliberate composition probe, the same real discipline
+// that caught two genuine bugs in the "if" case's own any-boxing (see that case's own doc
+// comment): a let nested inside an if branch must produce a concrete, correctly-typed value the
+// outer if's own any-boxing/RetType-cast can wrap without a second, different bug class.
+func TestEmitGoNestedLetInsideIf(t *testing.T) {
+	g, err := buildGo(t, "(defn clamp-and-double [(x : I32)] : I32\n"+
+		"  (if (> x 0) (let [doubled (* x 2)] doubled) 0))")
+	if err != nil {
+		t.Fatalf("a let nested inside an if branch should emit and compile successfully: %v", err)
+	}
+	if !strings.Contains(g, "doubled := ") {
+		t.Errorf("expected the nested let's own real local declaration: got %s", g)
+	}
+}
+
+// TestEmitGoDoSequencesForEffect -- real, new capability alongside let: (do a b c) runs a and b
+// for effect (their own values discarded), c is the real result.
+func TestEmitGoDoSequencesForEffect(t *testing.T) {
+	g, err := buildGo(t, "(defn material-paper [] : I32 0)\n"+
+		"(defn seq-test [(x : I32)] : I32\n  (do (material-paper) x))")
+	if err != nil {
+		t.Fatalf("do should emit successfully: %v", err)
+	}
+	if !strings.Contains(g, "_ = MaterialPaper()") {
+		t.Errorf("expected the non-final do expression to run for effect, value discarded: got %s", g)
+	}
+}
+
+// TestEmitGoLetTwoBindingsChained -- real, second real multi-binding probe (a := then b := a+1,
+// distinct expression shape from the multiply/add mix above) confirming sequential chaining
+// isn't a one-shape coincidence.
+func TestEmitGoLetTwoBindingsChained(t *testing.T) {
+	g, err := buildGo(t, "(defn double-it [(x : I32)] : I32\n  (let [y (* x 2) z (+ y 1)] z))")
+	if err != nil {
+		t.Fatalf("unexpected emit error: %v", err)
+	}
+	if !strings.Contains(g, "y := ") || !strings.Contains(g, "z := ") {
+		t.Errorf("expected both real Go local declarations: got %s", g)
+	}
+	if !strings.Contains(g, "y + 1") {
+		t.Errorf("expected the second binding to reference the first: got %s", g)
+	}
+}

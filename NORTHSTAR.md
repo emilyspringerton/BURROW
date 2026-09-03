@@ -264,6 +264,20 @@ real `bazel build //...` both clean, the real SDL2 visor binary run under Xvfb i
 before the mod was wired in. `DUNG` is this target's own real, live, first host now — Phase 5's
 GoblinFoxDragon candidacy is unaffected, just no longer the only one.
 
+**`let`/`do` shipped (2026-09-03)**, kanban priority-queue cards 1199/9988: "iterate on project
+burrow... so that parena gets transformed into idiomatic go" / "emily for business CLI written
+in GO with BURROW." The single largest real gap standing between this target and writing any
+real, non-trivial program (a CLI included): v0's "one-expression body" scope meant no `.prn`
+function could declare a local variable at all. Closed via the exact same immediately-invoked-
+func-literal-boxed-through-`any` shape the `if` case already established — `let`/`do` compose
+with `if` (and each other) for free, real bindings are scoped to a cloned params map so they
+never leak outside their own `let` (proven by a real test, not just claimed). `go test`: 73/73.
+**Real, live, end-to-end proof**: a real two-binding `let` and a real nested `let`-inside-`if`
+both compiled via `burrow build`, linked into a real, separate Go module, and run with correct
+output. Still real, honest, unstarted: `defenum`/`match`/`loop`/`Result`/`Vec`, struct
+construction — a real CLI needs at least `match`/`Result` for real error handling and `loop` for
+iteration before "write a CLI in this" is fully true, not just closer to true.
+
 ## Real risks and open questions, named honestly
 
 - **Scale**: this is a genuinely large project relative to everything else built this same

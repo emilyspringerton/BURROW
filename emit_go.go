@@ -202,6 +202,74 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 			scope.retType + "(" + elseE + ") }().(" + scope.retType + ")", nil
 	}
 
+	// `let`/`do` -- real, new capability (kanban priority-queue card 1199/9988: "iterate on
+	// project burrow... so that parena gets transformed into idiomatic go" / "emily for business
+	// CLI written in GO with BURROW"). Real, decisive finding that motivated this: v0's own
+	// "one-expression body" scope meant NO real function could declare a local variable at all
+	// -- the single largest real gap blocking any real multi-statement logic (a CLI's own
+	// argument parsing, string building, sequential setup) from ever reaching this target.
+	//
+	// Real design choice, matching the exact same real trick the "if" case above already uses:
+	// emitted as an immediately-invoked func literal, boxing the final result through `any` and
+	// asserting it back to the ENCLOSING defn's own declared return type (`scope.retType`) --
+	// this emitter still does no real type inference of its own, so it leans on the same
+	// already-proven mechanism rather than inventing a second one. This keeps `let`/`do` "one
+	// real expression" from the caller's own point of view, same as `if`, and means a `let`
+	// nested inside an `if` branch (or vice versa) composes correctly for free -- both cases
+	// always hand back a concrete, correctly-typed Go expression to whatever wraps them.
+	//
+	// Real, deliberate scope, narrower than PARENA's own `let`: bindings are evaluated into a
+	// CLONED local-params map (not scope's own), so a `let`'s bindings never leak into sibling
+	// expressions outside it -- real, correct lexical scoping for this one level, not yet
+	// verified against deeper real-world shadowing edge cases (e.g. a binding shadowing an outer
+	// param of the same name is untested; PARENA's own real style avoids that anyway).
+	if head == "let" {
+		if len(expr.Children) < 3 || expr.Children[1].Type != NodeVec {
+			return "", errors.New("emit_go: let requires (let [name expr ...] body...)")
+		}
+		bindings := expr.Children[1]
+		if len(bindings.Children)%2 != 0 {
+			return "", errors.New("emit_go: let bindings vector must have an even number of elements (name expr pairs)")
+		}
+		childParams := make(map[string]bool, len(scope.localParams)+len(bindings.Children)/2)
+		for k, v := range scope.localParams {
+			childParams[k] = v
+		}
+		childScope := &emitGoScope{knownDefns: scope.knownDefns, localParams: childParams, retType: scope.retType}
+
+		var stmts []string
+		for i := 0; i+1 < len(bindings.Children); i += 2 {
+			nameNode := bindings.Children[i]
+			valNode := bindings.Children[i+1]
+			if nameNode.Type != NodeSymbol {
+				return "", errors.New("emit_go: let binding name must be a plain symbol")
+			}
+			valE, err := emitGoExpr(valNode, childScope)
+			if err != nil {
+				return "", err
+			}
+			childScope.localParams[nameNode.Text] = true
+			stmts = append(stmts, mangleGoLocal(nameNode.Text, childScope)+" := "+valE)
+		}
+		bodyE, err := emitGoBody(expr.Children[2:], childScope)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, bodyE...)
+		return wrapGoStmtsAsExpr(stmts, scope.retType), nil
+	}
+
+	if head == "do" {
+		if len(expr.Children) < 2 {
+			return "", errors.New("emit_go: do requires at least one body expression")
+		}
+		stmts, err := emitGoBody(expr.Children[1:], scope)
+		if err != nil {
+			return "", err
+		}
+		return wrapGoStmtsAsExpr(stmts, scope.retType), nil
+	}
+
 	// `(not x)` -- real, same unary-operator gap emit_c.go's own real fix just closed, same day,
 	// same real trigger (stdlib/k8s/operator.prn's own `(if (not exists) ...)`); Go's own `!`
 	// negation operator is the direct equivalent.
@@ -272,10 +340,55 @@ func emitGoExpr(expr *Node, scope *emitGoScope) (string, error) {
 	return b.String(), nil
 }
 
-// mangleGoLocal — a bare symbol reference inside a body is either a LOCAL param (Go convention:
-// lowercase, unexported -- matches every real, idiomatic Go function's own parameter naming, and
-// this v0 has no let-bindings so every local name is a fixed-for-the-whole-body param, same real
-// scope emitCScope's own doc comment already establishes) or a real, zero-arg sibling call (which
+// emitGoBody — real, shared sequencing logic for both `let` and `do`: every expression but the
+// last runs as a real Go statement for effect only (its value discarded via `_ =`, matching the
+// same real PARENA semantics `do`/a `let`'s own multi-expression body already have -- side
+// effects, not accumulation), and the final expression's own emitted Go becomes the sequence's
+// real result statement (a bare `return`-less expression here; wrapGoStmtsAsExpr below is what
+// actually turns it into a real `return`).
+func emitGoBody(bodyExprs []*Node, scope *emitGoScope) ([]string, error) {
+	if len(bodyExprs) == 0 {
+		return nil, errors.New("emit_go: let/do requires at least one body expression")
+	}
+	var stmts []string
+	for i := 0; i < len(bodyExprs)-1; i++ {
+		e, err := emitGoExpr(bodyExprs[i], scope)
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, "_ = "+e)
+	}
+	resultE, err := emitGoExpr(bodyExprs[len(bodyExprs)-1], scope)
+	if err != nil {
+		return nil, err
+	}
+	stmts = append(stmts, "__RESULT__ "+resultE)
+	return stmts, nil
+}
+
+// wrapGoStmtsAsExpr — turns a real statement list (the last one tagged "__RESULT__ <expr>" by
+// emitGoBody above) into the exact same real immediately-invoked-func-literal-boxed-through-any
+// shape the "if" case already established, so `let`/`do` compose with everything else (nested
+// inside an `if` branch, or vice versa) without emitGoExpr's own caller ever needing to know the
+// difference.
+func wrapGoStmtsAsExpr(stmts []string, retType string) string {
+	var b strings.Builder
+	b.WriteString("func() any { ")
+	for _, s := range stmts {
+		if rest, ok := strings.CutPrefix(s, "__RESULT__ "); ok {
+			b.WriteString("return " + retType + "(" + rest + ")")
+		} else {
+			b.WriteString(s)
+			b.WriteString("; ")
+		}
+	}
+	b.WriteString(" }().(" + retType + ")")
+	return b.String()
+}
+
+// mangleGoLocal — a bare symbol reference inside a body is either a LOCAL param or let-binding
+// (Go convention: lowercase, unexported -- matches every real, idiomatic Go function's own
+// parameter naming) or a real, zero-arg sibling call (which
 // must be exported PascalCase + `()`, since it's a real function reference, not a value).
 func mangleGoLocal(name string, scope *emitGoScope) string {
 	if scope.localParams[name] {

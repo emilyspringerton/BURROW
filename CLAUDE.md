@@ -55,8 +55,8 @@ day** (real trigger: PARENA's own new `stdlib/k8s/operator.prn`) — a real, gen
 `emit_c.go` and `emit_go.go` (fell through to a bogus call to a never-defined `not(...)` function;
 the same real gap `parena-c`'s own `src/emit.c` already fixed on 2026-08-21, burrow just hadn't
 hit a real file using it yet). `go test`: 52/52 (50 prior + 2 new). `burrow` is installed on
-`PATH`. Full `emit.c` parity (`defenum`/`match`/`loop`/`Result`/`Vec`, struct *construction*,
-`let`-bindings) and the TypeScript/Java targets remain unstarted.
+`PATH`. Full `emit.c` parity (`defenum`/`match`/`loop`/`Result`/`Vec`, struct *construction*) and
+the TypeScript/Java targets remain unstarted — `let`/`do` landed 2026-09-03, see below.
 
 **`defstruct`/`get-field` support added to the C target too, closing DUNG's own real found-live
 gap** (2026-09-03, founder: "CONTINUE WORKING ON DUNG IDE" → investigated writing it in LO,
@@ -74,6 +74,25 @@ needed). Verified live, not just unit tests: a real `.prn` file with a `Rect`-sh
 compiled via `burrow build`, the emitted C compiled clean with `gcc -Wall -Wextra`, and run —
 correct result (`(1440-20)/2 = 710`) against a real test harness. `go build`/`go vet`/`go test`
 all clean (66/66 total).
+
+**`let`/`do` added to the Go emission target** (2026-09-03, kanban priority-queue cards
+1199/9988: "iterate on project burrow... so that parena gets transformed into idiomatic go" /
+"emily for business CLI written in GO with BURROW"). Real, decisive finding that motivated
+this: v0's own "one-expression body" scope meant no real `.prn` function could declare a local
+variable at all — the single largest real gap blocking any real multi-statement logic (a CLI's
+own arg parsing, string building, sequential setup) from reaching this target. Real design:
+`let`/`do` emit as the exact same immediately-invoked-func-literal-boxed-through-`any` shape the
+`if` case already established, so they compose with `if` (and each other) for free — a `let`
+nested inside an `if` branch, or vice versa, always hands back a concrete, correctly-typed Go
+expression to whatever wraps it. Real, deliberate scope: `let` bindings are evaluated into a
+CLONED local-params map, not `scope`'s own — a binding never leaks outside its own `let`, proven
+by a real test asserting the exact "unknown identifier" error a leak would silently avoid. `go
+test`: 73/73 (66 prior + 7 new — single/multi-binding let, sequential-scope chaining, the
+no-leak proof, nested-let-inside-if composition, `do`'s own effect-then-result sequencing).
+**Real, live, end-to-end proof, not just unit tests**: a real two-binding `let` (`(let [y (* x 2)
+z (+ y 1)] z)`) and a real nested `let`-inside-`if` (`clamp-and-double`) both compiled via a real
+`burrow build`, `go build`-linked into a real, separate Go module, and run — correct output
+(`double-it(5) = 11`, `clamp-and-double(5) = 10`, `clamp-and-double(-3) = 0`) for both.
 
 **`DUNG` is its own separate repo** (`github.com/emilyspringerton/DUNG`, first scoped inside this
 repo as `DUNG.md`, corrected by the founder into its own standalone, Bazel-built repo) — "the
