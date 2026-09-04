@@ -377,9 +377,14 @@ CLI deliverable itself still hasn't been started.
   ongoing cost this doc names but doesn't resolve (matching Go/Rust's own real, well-known
   "self-hosted rewrite" tradeoff history, cited in `PARENA/NORTHSTAR.md`'s own self-hosting
   section as the precedent this whole idea is patterned on).
-- **No real host has asked for the Go emission target (Phase 6) yet** — same honest flag this
-  doc's own first draft already carried for that specific piece; still true under the corrected,
-  larger scope.
+- **Real first host adoption of the Go emission target (Phase 6), 2026-09-04**: GoblinFoxDragon's
+  `server/modevent` (GFD-x-123/124, "mod interface for event broker... USE PARENA TYPES") is the
+  first real host anywhere in this monorepo to actually consume `burrow build`'s Go target --
+  `PARENA/stdlib/gfd/nm_bonus_mod.prn` compiled straight to `apps2/mud/internal/burrowgen/
+  nm_bonus_mod_gen.go` (committed, not regenerated at build time, same precedent
+  `ECOWAR/docs/ARENA_API.md` set for the C target), called by name from `apps2/mud`'s own
+  `resolveKill`. The honest flag this section carried until now (no real host had asked) is
+  resolved by a real, working, tested, live-deployed case, not just a synthetic smoke test.
 - **Real, concrete dogfooding data on where Phase 4's own v0 C emitter stops, from `DUNG`'s own
   first real usage (2026-08-30)**: `DUNG/parena/rect_probe.prn` defines a `defstruct` — `burrow
   parse`/`analyze` both accept it fine (parser/region already handle `defstruct` generally), but
